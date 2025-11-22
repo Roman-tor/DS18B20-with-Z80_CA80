@@ -1,0 +1,711 @@
+00000h                                                           ; linia DATA DS 18B20 podlaczona do PB0 - port P2 /8255/ w CA80 by phill
+00000h                                                           ; P2 od lewej: DATA, wolny, GND, +5V 
+00000h            COM:                  EQU       01ABH          ; wyśw. znaku z rej. C, podać jeszcze PWYS
+00000h            EXPR:                 EQU       0213H          ; pob. liczb/4./ na stos
+00000h            CSTS:                 EQU       0FFC3H         ; czy klaw. wciśniety, WYJ - kod w rej. A
+00000h                                                           ;START:       EQU 1E39H
+00000h                                                           ;START21:     EQU 0FEF0h ; cd 391e i cd 8a1a c9, wybór lcd, bez czyszcznia itp
+00000h                                                           ;STOP:        EQU 1E4CH ; dotyczy pamieci EEPROM 24Cxxx /I2C
+00000h            INI_LCD:              EQU       2000H
+00000h            INSTR:                EQU       0E8H           ; lcd_instrukcja
+00000h            DANA:                 EQU       INSTR+1        ;0E9h  dana
+00000h                                                           ;BUSY:        EQU instr+2 ;0EAh
+00000h            LCD_RDR:              EQU       INSTR+3        ;0Ebh
+00000h            BUSY:                 EQU       203AH
+00000h            KAS_OBSZAR:           EQU       1C42H          ; kasuje znaki na lcd - górne linie, ilosc w rej. B, od poz. - rej. A
+00000h            WYS_TEKST:            EQU       2043H          ; wyswietla tekst /koniec FF/ - gorne linie
+00000h            WYSW_A:               EQU       2523H          ; wyświetla zaw. rej. A na lcd
+00000h                                                           ;wysw_dana:   EQU 2BD0h ; wyśw. znak na lcd, z rej. A
+00000h                                                           ;wys_lcd_dana:EQU 2054h ; wyswietla znak na lcd np. 31 to 1, 32 to 2
+00000h            WYB_PORT:             EQU       0FD99H         ; przechowalnia wybranego portu /E3 lub E7/
+00000h            WYB_PORT_E3:          EQU       1CBDH
+00000h                                                           ;wyb_port_E7: EQU 1CC1h
+00000h                                                           ;ZAP_BAJT:    EQU 1A8AH ; zapisuje daną z rej. E
+00000h                                                           ;CZYT_BAJT:   EQU 1AEAh
+00000h                                                           ;M_ACK:       EQU 1ADBh
+00000h            U_K_HOME:             EQU       1C3AH          ; ustawia kursor na HOME
+00000h                                                           ;op_100ms:    EQU 2225h ; opożnienie 0,1 sek + parametr
+00000h                                                           ;rozdziel:    EQU 1C43h ; dzieli rej. A na dwie liczby/znaki i umieszcza w HL
+00000h                                                           ;kod_liter_pl: EQU  2495h ;kody polskich liter
+00000h                                                           ;rozdziel:     EQU  1C4Bh ;dzieli rej. A na dwie liczby/znaki i umieszcza w HL
+00000h            CZAS_TEMP:            EQU       0FCFFH         ; tu zapisz, co ile sekund odczyt temperatury
+00000h                                                           ;interw_temp: EQU 120 ; odczyt temp. co 120 sekund/78h/
+00000h                                            
+00000h            USER_PORT0:           EQU       0E3H           ; słowo kontr. portu użytkownika
+00000h                                                           ;USER_PORT1:  EQU 0E7h ; słowo kontr. dodatkowego portu użytkownika
+00000h                                                           ;PORT_DS3231: EQU 0E7h ; tu podłączony DS
+00000h            STOS:                 EQU       0FF66H         ; pocz. stosu systemowego CA80
+00000h            L1:                   EQU       80H            ; pocz. 1. linii LCD 4x20 znaków
+00000h            L2:                   EQU       0C0H           ; pocz. 2. linii
+00000h            L3:                   EQU       94H            ; pocz. 3 linii
+00000h            L4:                   EQU       0D4H           ; pocz. 4. linii
+00000h            CYF0:                 EQU       0FFF7H
+00000h            CYF1:                 EQU       0FFF8H         ;cyfra do wyświetlania na CA80
+00000h            CYF2:                 EQU       0FFF9H
+00000h            CYF3:                 EQU       0FFFAH
+00000h            CYF4:                 EQU       0FFFBH
+00000h            CYF5:                 EQU       0FFFCH
+00000h            CYF6:                 EQU       0FFFDH
+00000h            CYF7:                 EQU       0FFFEH
+00000h                                                           ;===================
+00000h            PRINT:                EQU       01D4H          ; wyświetla tekst wg (HL), + PWyśw CD D4 01 44
+00000h                                                           ;wys_c:       EQU 01ABh ; COM - wyśw. zawartość rej. C, podać PWYS
+00000h            POB_HL:               EQU       01F4H          ; pobiera bajty do hl, podać PWYS
+00000h                                                           ;przepisz:    EQU 08F2h ; przepisanie obszaru EProm do RAM / podpr. ca88
+00000h            DOP_EPROM:            EQU       08FFH          ; dopasowanie parametrów wejśc. EPROM
+00000h            KAS_BUFOR:            EQU       0E2CH          ; kas. bufora  do obliczeń (podprogr.z kalkulatora)
+00000h            WPIS_BUF:             EQU       0C57H          ; wpis liczby do bufora
+00000h            WYS_BUF:              EQU       0D41H          ; wyświetla bufor, podprogram z kalkulatora CA88, do zam_16_na_10
+00000h            POB_KL:               EQU       0FFC3H         ; pobiera znak z klawiatury /flaga C/
+00000h            ERR:                  EQU       0A23H          ; tekst "Err" ca80
+00000h                                                           ;s_adr_d_EP:  EQU 0b32h ; ustaw adres BC i daną (HL) - pamięć EPROM
+00000h            HILO:                 EQU       023BH
+00000h                                                           ; d_opoz:      EQU 0FEe9h; przesunięty obszar opóźnienia
+00000h                                                           ;start2:      EQU 0FEF0h; do wykorzystania, jeśli korzystamy zI2C w dodatk. 8255
+00000h                                                           ; zgas:        EQU 11h ; gaszenie cyfr wyświetlacza CA80
+00000h            L_1W:                 EQU       80H            ; PA, PB, PC - WYJ stan niski
+00000h            H_1W:                 EQU       82H            ; PB - WEJ stan wysoki /rezystor podciagający/, PA, PC - WYJ
+00000h            ADR_BUF_NS:           EQU       0FCF0H         ; tu aktualny adres numeru seryjnego
+00000h                                                           ;adr_NS1:     EQU AB ; adres zapisu numeru s; odczyt i wyświetlenie temp. wg numeru seryjnego
+00000h                                                           ;adr_NS3:     EQU adr_NS2+8
+00000h            BUF_TEMP:             EQU       0FD95H         ; tu zapisuj odczytane temperat.
+00000h            BUF_TEMP2:            EQU       0FD97H         ; tu zapisz temp., jeśli inna niz poprzedni odczyt
+00000h            BUF_TEMP_PRZEL:       EQU       0FD92H
+00000h            BUF_KOR:              EQU       0FD90H         ; wielkość korekcji
+00000h            BUF_KOR_1:            EQU       0FD80H         ; wielkość korekcji czujnika 1
+00000h            BUF_KOR_2:            EQU       0FD82H         ; wielkość korekcji czujnika 2
+00000h            BUF_DODATK:           EQU       0FD8EH         ; bufor starsz. bajtu temp., do znaku temperat.
+00000h            LICZ_DS:              EQU       0FD88H         ; tutaj numer 1, 2, 3 itd, numer wyswietl. DS
+00000h            POZ_T:                EQU       0FEC0H         ; aktualna poz. wyświetl. temp. na LCD
+00000h            POZ_T1:               EQU       80H            ; pozycja wyśw. temp. czujnika T1
+00000h            POZ_T2:               EQU       8BH            ; pozycja wyśw. temp. czujnika T2
+00000h            POZ_T3:               EQU       0FEC6H         ;
+00000h            PORT_DS:              EQU       USER_PORT0-2
+00000h                                                           ;poz_t8:         equ 8ah
+00000h            AA:                   EQU       7000H
+00000h                                                           ; wersja F - dodano wyswietlenie numeru seryjnego - klawisz G
+00000h                                                           ; zlecenia od 2a7, 8- od 824, 8* - od 2212
+00000h                                                           ; ą-0, ć-1, ę-2, ł-3, ń-4,ó-5,ś-6,ż-7 kody liter  w LCD
+00000h                                                           ; 80-A,B,C WYJ; 82- A,C WYJ, B WEJ; 8A-A,B WYJ, C0-3 WYJ, C4-7 WEJ; 90-A WEJ, B,C WYJ; 9B-A,B,C WEJ
+00000h                                                           ; WEJ stan H, WYJ stan L
+00000h                                                           ; wers. g -dodano stan H przy zapisie stanu "0"
+00000h                                                           ; ver. 9a - zmiana na lcd 4x20 znaków
+00000h                                                           ; ver. .9b - tylko jeden czyjnik DS18B20, nowa wersja CA80 by phill, pod P2
+00000h                                  ORG       AA             ; linia DATA DS 18B20 podlaczona do PB0
+07000h            CA80_1W:                                       ; 1WD9b
+07000h 3166FF                           LD        SP,0FF66H
+07003h 21FFFF                           LD        HL,0FFFFH
+07006h 2297FD                           LD        (BUF_TEMP2),HL ; potrzebne do ewent. porównania temp., aktualnej i poprzedniej
+07009h 0E63                             LD        C,63H          ; znak stopnia na CA80
+0700Bh CDAB01                           CALL      COM            ;wyśw. znaku z rej. C
+0700Eh 12                               DEFB      12H            ; PWYS
+0700Fh 0E39                             LD        C,39H          ; znak "C" Celsjusza
+07011h CDAB01                           CALL      COM            ; wyśw. zawartosc rejestr C
+07014h 11                               DEFB      11H            ; PWYSW
+07015h 210000                           LD        HL,0           ; tu wpisujemy ewentualna korekcje
+07018h 2290FD                           LD        (BUF_KOR),HL   ;   np. ld hl, 04A5 - 100 st.C, ld hl, FdB5 - minus 10 st. C
+0701Bh            TEMP_DANE:                      
+0701Bh                                                           ;jr ca80_1W_0 ; jeśli pomijamy wyśw. na LCD
+0701Bh 00                               NOP       
+0701Ch 00                               NOP       
+0701Dh CD0020                           CALL      INI_LCD        ; ustawia tez kursor na pozycji HOME
+07020h 3EC3                             LD        A,0C3H         ; rozkaz C3 JP
+07022h 3220FF                           LD        (0FF20H),A     ; od FF20 C3 xx (powrot po bledzie ACK)
+07025h CD3A1C                           CALL      U_K_HOME       ; ustaw kursor na HOME
+07028h 219572                           LD        HL,TEMP1
+0702Bh CD4320                           CALL      WYS_TEKST      ; "T1 "
+0702Eh                                                           ;ld a, poz_t2 ; poz. kursora
+0702Eh                                                           ;halt   
+0702Eh                                                           ;out (instr), a
+0702Eh                                                           ;ld hl, temp2 ; "T2 "
+0702Eh                                                           ;call wys_tekst
+0702Eh 3E9B                             LD        A,9BH          ; port A, B, C jako WEJ - stan wysoki
+07030h D3E3                             OUT       (USER_PORT0),A
+07032h CDB672                           CALL      ODCZYT_NS
+07035h            CA80_1W_0:                                     ; 
+07035h                                                           ; pierwszy czujnik, odczyt i wyświetlenie temp. wg numeru seryjnego DS-a
+07035h 2E80                             LD        L,POZ_T1       ; poz. "T1 "
+07037h 2683                             LD        H,POZ_T1+3     ; poz. wyświetlanych stopni
+07039h                                                           ;ld hl, poz_T1
+07039h FD219E72                         LD        IY,ADR_NS1     ;
+0703Dh 3E06                             LD        A,6            ; "1" na CA80 -  pierwszy czujnik
+0703Fh 3288FD                           LD        (LICZ_DS),A
+07042h                                                           ;ld c, 6h ; wyśw. "1" na ca80 
+07042h                                                           ;call 01Abh
+07042h                                                           ;defb 17h ; poz. na ca80
+07042h CD0372                           CALL      ODCZYT_T       ; odczyt i wyświetl. temp. na CA80 i na LCD
+07045h CDC3FF                           CALL      POB_KL
+07048h FE10                             CP        10H            ; klawisz G - czytaj numer seryjny DS-a
+0704Ah CAF072                           JP        Z,WYSW_NR_DS
+0704Dh                                                           ; drugi czujnik
+0704Dh                                                           ;ld iy, adr_NS2
+0704Dh                                                           ;ld l, poz_T2
+0704Dh                                                           ;ld h, poz_T2+3
+0704Dh                                                           ;ld hl, poz_T2
+0704Dh                                                           ;ld a, 5bh ; "2" na CA80 - drugi czujnik
+0704Dh                                                           ;ld (licz_ds), a
+0704Dh                                            
+0704Dh                                                           ; call odczyt_T
+0704Dh                                                           ; call pob_kl
+0704Dh                                                           ; cp 10h ; klawisz G - czytaj numer seryjny DS-a
+0704Dh                                                           ; jp z, ODCZYT_NS
+0704Dh 18E6                             JR        CA80_1W_0      ; 
+0704Fh                                            
+0704Fh 00                               ORG       AA+50H
+07050h            INI_1_WIRE:                                    ; stan niski przez min. 480 us na PB
+07050h 0EE3                             LD        C,USER_PORT0   ; złącze użytkownika dodatkowe, słowo steruj. E7
+07052h ED69                             OUT       (C),L
+07054h CD6F72                           CALL      OPOZ_480US     ; opoźn. min. 480 us
+07057h ED61                             OUT       (C),H          ; ustawia "1" na PB, rezystor "podciąga"  do +5V
+07059h CD8372                           CALL      OPOZ_36US      ; opóźn.
+0705Ch            ACK_1W:                                        ; sprawdź linie DQ DS18B20
+0705Ch DBE1                             IN        A,(PORT_DS)    ; odczyt portu PB
+0705Eh CB47                             BIT       0,A            ; testuj bit 0 (0 = potw. obecności DS18B20, 1 = brak
+07060h 20FA                             JR        NZ,ACK_1W      ; czekaj aż będzie "0" - stan niski
+07062h CD7972                           CALL      OPOZ_410US
+07065h C9                               RET       
+07066h                                            
+07066h            ACK_1W_1:                                      ; sprawdź linie DQ DS18B20 - czy koniec konwersji temp.
+07066h                                                           ; podciągnięcie linii do +5V przez tranzystor mosfet P
+07066h                                                           ; podłączony np. do  portu C, bit 0 - np. ld a, 0 out (C), a; stan L : ld a, 1 out(C), a; stan H
+07066h 04                               INC       B              ; B=1    stan wysoki
+07067h 0D                               DEC       C
+07068h 0D                               DEC       C              ; C = E5 -> port B
+07069h ED41                             OUT       (C),B          ; ustaw "1" na bicie 0 portu B- zasilanie DS-a PULLUP
+0706Bh CD5D72                           CALL      OPOZ_750MS     ; opóźn. ok 750 ms
+0706Eh 05                               DEC       B              ; B = 0 /stan niski
+0706Fh CD8372                           CALL      OPOZ_36US
+07072h C9                               RET       
+07073h                                            
+07073h            TABL_TEMP:                                     ; tablica dziesiątych st. C
+07073h 0000010202                       DEFB      0,0,1,2,2,3,4,4,5,5,6,7,7,8,9,9; to wyświetla na ca80
+07083h                                                           ;  0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F ; to odczyt z DS18B20
+07083h                                            
+07083h                                                           ; ORG AA+150h
+07083h            ZAP_1W_1B:                                     ; zapisz jeden bajt do DS18B20
+07083h 0601                             LD        B,1            ;1. bajt
+07085h CD8B72                           CALL      WYL_NMI
+07088h 1809                             JR        ZAP_1W_A1
+0708Ah                                            
+0708Ah            ZAP_1W_8B:                                     ;wpis numeru seryjnego do DS-ów  /8 - bajtów/
+0708Ah 0608                             LD        B,8            ; il. bajtów numeru seryjnego DS-a
+0708Ch CD8B72                           CALL      WYL_NMI
+0708Fh                                            
+0708Fh            ZAP_1W_A:                       
+0708Fh AF                               XOR       A              ; wyzeruj CARRY, potrzebne przy wysyłaniu bitów
+07090h FD5E00                           LD        E,(IY)         ; tylko dla Aside, dla assemblera C32  FD 5E 00
+07093h            ZAP_1W_A1:                      
+07093h 1608                             LD        D,8            ; ile bitów wysłać
+07095h            ZAP_1W_A2:                      
+07095h 7B                               LD        A,E            ; w rej. E bajt do zapisu
+07096h 1F                               RRA                      ; od najmłodszego bitu
+07097h 5F                               LD        E,A            ; zapamiętanie
+07098h 3015                             JR        NC,ZAP_1W_A0   ; zapisz "0"
+0709Ah                                                           ; zapisz - wyślij "jedynkę" do DS18B20
+0709Ah                                                           ;out (C), H
+0709Ah 00                               NOP       
+0709Bh 00                               NOP       
+0709Ch ED69                             OUT       (C),L          ; początek slotu
+0709Eh ED61                             OUT       (C),H
+070A0h CD8372                           CALL      OPOZ_36US
+070A3h 15                               DEC       D              ; czy ostatni bit?
+070A4h 20EF                             JR        NZ,ZAP_1W_A2   ; nie
+070A6h FD23                             INC       IY
+070A8h 05                               DEC       B              ; czy ostatni bajt?
+070A9h 20E4                             JR        NZ,ZAP_1W_A    ; nie
+070ABh            ZAP_1W_BACK:                                   ; powrót po zapisie
+070ABh CD9072                           CALL      WL_NMI
+070AEh C9                               RET       
+070AFh                                            
+070AFh            ZAP_1W_A0:                                     ; zapis "0" stan niski
+070AFh                                                           ;out (C), H
+070AFh 00                               NOP       
+070B0h 00                               NOP       
+070B1h ED69                             OUT       (C),L          ;początek slotu
+070B3h CD7F72                           CALL      OPOZ_50US
+070B6h ED61                             OUT       (C),H          ; poprawka wer. g
+070B8h 15                               DEC       D              ; czy ostatni bit
+070B9h 20DA                             JR        NZ,ZAP_1W_A2
+070BBh ED61                             OUT       (C),H
+070BDh FD23                             INC       IY
+070BFh 05                               DEC       B              ; czy ostatni bajt?
+070C0h 20CD                             JR        NZ,ZAP_1W_A
+070C2h 18E7                             JR        ZAP_1W_BACK
+070C4h                                            
+070C4h            ODCZYT_1W:                                     ; odczyt bajtu z DS18B20, rej. B ile bajtów
+070C4h                                                           ;IX wskazuje BUF_TEMP ; tu zapisuj odebrane bajty
+070C4h            ODCZYT_1W_1:                    
+070C4h CD8B72                           CALL      WYL_NMI
+070C7h            OD1_1W0:                        
+070C7h 1608                             LD        D,8            ; ile bitów
+070C9h 1E00                             LD        E,0            ; odebrane bity zapisuj w rej. E
+070CBh            ODCZYT_1W_2:                    
+070CBh ED69                             OUT       (C),L          ; stan niski
+070CDh ED61                             OUT       (C),H          ; stan wysoki
+070CFh                                            
+070CFh            OD1_1W:                         
+070CFh 00                               NOP       
+070D0h 00                               NOP       
+070D1h DBE1                             IN        A,(PORT_DS)    ; odczytaj port, gdzie podłączony DS18B20
+070D3h E601                             AND       01H            ; zeruj bity 7 do 1, zostaw bit 0
+070D5h 83                               ADD       A,E
+070D6h 0F                               RRCA      
+070D7h 5F                               LD        E,A            ; zapamiętanie
+070D8h CD8772                           CALL      OPOZ_24US
+070DBh 15                               DEC       D              ; licznik bitów
+070DCh 20ED                             JR        NZ,ODCZYT_1W_2
+070DEh DD7300                           LD        (IX),E         ; tylko dla kompilatora ASiede   ;dfb 0DDh, 73h, 0  dla CA80
+070E1h DD23                             INC       IX
+070E3h 05                               DEC       B              ; licznik odbieranych bajtów
+070E4h 20E1                             JR        NZ,OD1_1W0
+070E6h CD9072                           CALL      WL_NMI
+070E9h C9                               RET       
+070EAh 00                               NOP       
+070EBh 00                               NOP       
+070ECh                                            
+070ECh            KOR_TEMP:                                      ; korekcja temper. i zamiana starszego bajtu z młodszym, ułatwia dodawanie
+070ECh AF                               XOR       A              ; FDBO  ok. -14 st.C, 04B0 ok. +90 st. C
+070EDh 2A95FD                           LD        HL,(BUF_TEMP)
+070F0h ED4B90FD                         LD        BC,(BUF_KOR)   ; wielkość korekcji
+070F4h ED4A                             ADC       HL,BC
+070F6h 2295FD                           LD        (BUF_TEMP),HL
+070F9h 7C                               LD        A,H            ; zapamiętanie: setki, dzies, jedn
+070FAh 328EFD                           LD        (BUF_DODATK),A ; do wyśw. ew. znaku "-" na lcd, gdy temp. ujemna
+070FDh C9                               RET       
+070FEh                                            
+070FEh            TEST_TEMP:                                     ;czy temp. dodatnia czy ujemna, jeśli ujemna zrób konwersje
+070FEh 2196FD                           LD        HL,BUF_TEMP+1
+07101h 7E                               LD        A,(HL)         ; starszy bajt temp.
+07102h CB7F                             BIT       7,A            ; wskaznik temperatury, jeśli 1 to temp. minusowa, zero to temp.plusowa
+07104h 2001                             JR        NZ,TEST3       ; temp. ujemna
+07106h C9                               RET       
+07107h                                                           ; konwersja temp. w uzupełnieniu do 2. jesli temp. jest ujemna
+07107h            TEST3:                          
+07107h 210000                           LD        HL,0
+0710Ah ED4B95FD                         LD        BC,(BUF_TEMP)
+0710Eh ED42                             SBC       HL,BC
+07110h            TEST1:                          
+07110h 2295FD                           LD        (BUF_TEMP),HL  ; przeniesienie wyniku, zapamiętanie
+07113h C9                               RET       
+07114h                                            
+07114h            WYSW_TEMP:                                     ; przeliczenie i wyświetlenie temperatury na ca80
+07114h D7                               RST       10H            ; d7 34 czysc wyswietl. CA80
+07115h 34                               DEFB      34H            ; PWYSW , zostawia znak stopnia i C
+07116h 2196FD                           LD        HL,BUF_TEMP+1  ;
+07119h 7E                               LD        A,(HL)         ; starszy bajt odczyt. temp - setki, dzisiątki i jedności
+0711Ah 47                               LD        B,A
+0711Bh 210000                           LD        HL,0           ; czyść rejestry do obliczeń
+0711Eh FE00                             CP        0
+07120h 280E                             JR        Z,T2_1W        ; <= niż 9 st.C
+07122h            OBL_T4_1W:                      
+07122h 3E16                             LD        A,16H
+07124h 85                               ADD       A,L
+07125h 27                               DAA       
+07126h 6F                               LD        L,A
+07127h 3804                             JR        C,OBL_T3_1W
+07129h            T5_1W:                          
+07129h 10F7                             DJNZ      OBL_T4_1W
+0712Bh 1803                             JR        T2_1W
+0712Dh            OBL_T3_1W:                      
+0712Dh 24                               INC       H              ; temp. >= niż 100 st.C
+0712Eh 18F9                             JR        T5_1W
+07130h                                            
+07130h            T2_1W:                                         ; wyświetlenie temperatury
+07130h 3A95FD                           LD        A,(BUF_TEMP)
+07133h F5                               PUSH      AF             ; do wyliczenia dziesiątych st. C
+07134h E6F0                             AND       0F0H
+07136h 1F                               RRA       
+07137h 1F                               RRA       
+07138h 1F                               RRA       
+07139h 1F                               RRA       
+0713Ah FE0A                             CP        0AH
+0713Ch 3803                             JR        C,T2_1W_1
+0713Eh 06FA                             LD        B,0FAH         ; zamiana liczby >= od A na dziesiętną
+07140h 90                               SUB       B
+07141h            T2_1W_1:                                       ; dodaj temp. z mnożenia x 16 z jedn. z FD95
+07141h 85                               ADD       A,L
+07142h 27                               DAA       
+07143h 6F                               LD        L,A
+07144h 3001                             JR        NC,T2_1W_2
+07146h 24                               INC       H              ;zwiększ H o 1, bo temp >= 100 st. C; jeśli np. L = 96 i dodano np. 5
+07147h                                            
+07147h            T2_1W_2:                        
+07147h 2292FD                           LD        (BUF_TEMP_PRZEL),HL;zapamiętanie - setki, dziesiątki, jedności
+0714Ah F1                               POP       AF
+0714Bh E60F                             AND       0FH            ;usuń starsze bity
+0714Dh 217370                           LD        HL,TABL_TEMP   ; tablica musi leżeć w obrębie strony
+07150h 85                               ADD       A,L            ; wyliczenie adresu
+07151h 6F                               LD        L,A
+07152h 7E                               LD        A,(HL)         ; pobranie dziesiątych stopnia z tablicy
+07153h 3294FD                           LD        (BUF_TEMP_PRZEL+2),A; zapamiętanie dziesiątych st. C /dla LCD/
+07156h F5                               PUSH      AF
+07157h CD5472                           CALL      WYSW_LICZ_DS   ; wysw. ktory DS jest obslugiwany na PWYSW 17
+0715Ah F1                               POP       AF
+0715Bh DF                               RST       18H            ; wysw. A - dziesiąte stopnia
+0715Ch 23                               DEFB      23H            ; PWYSW
+0715Dh AF                               XOR       A              ; zeruj rej. A
+0715Eh 2A92FD                           LD        HL,(BUF_TEMP_PRZEL); temperatura: H-setki, L-dziesiątki i jedności
+07161h BC                               CP        H              ; czy >= 100 st. C
+07162h 280B                             JR        Z,OBL_T5       ; tzn. < od 100 st.
+07164h                                                           ; wyświetl "1"
+07164h 0E06                             LD        C,6            ; "1"
+07166h CDAB01                           CALL      COM
+07169h 16                               DEFB      16H            ; PWYS
+0716Ah 7D                               LD        A,L            ; dziesiątki i jedności
+0716Bh DF                               RST       18H            ; wyświetl rej. A
+0716Ch 24                               DEFB      24H            ; PWYS
+0716Dh 1813                             JR        DOB_KROPKI     ; dobicie kropki na wysw. ca80
+0716Fh                                            
+0716Fh            OBL_T5:                         
+0716Fh 7D                               LD        A,L            ; dziesiątki i jedności
+07170h E6F0                             AND       0F0H
+07172h 200B                             JR        NZ,OBL_T6      ; temp. >= 10 st. C
+07174h AF                               XOR       A              ; likwidacja zera przed cyfrą znaczącą
+07175h 32FBFF                           LD        (CYF4),A
+07178h 4D                               LD        C,L
+07179h CDE001                           CALL      1E0H
+0717Ch 14                               DEFB      14H            ;
+0717Dh 1803                             JR        DOB_KROPKI
+0717Fh            OBL_T6:                         
+0717Fh 7D                               LD        A,L
+07180h DF                               RST       18H            ; DF24
+07181h 24                               DEFB      24H            ; PWYS
+07182h            DOB_KROPKI:                     
+07182h 3AFBFF                           LD        A,(0FFFBH)
+07185h F680                             OR        80H
+07187h 32FBFF                           LD        (0FFFBH),A
+0718Ah CDE871                           CALL      ZNAK_MINUS
+0718Dh CD5D72                           CALL      OPOZ_750MS     ; nastepny odczyt
+07190h C9                               RET       
+07191h                                                           ;pocz.  obslugi LCD
+07191h            WYSW_NA_LCD:                                   ; wyśw. temp. na LCD
+07191h                                                           ;ld e, 4eh ; adres PCF i2C dla "lcd"
+07191h                                                           ;call start2 ; bez czyszcz. lcd, można wpisywać znaki na lcd
+07191h 3AC1FE                           LD        A,(POZ_T+1)    ; poz. wyśw. temperatury
+07194h D3E8                             OUT       (INSTR),A
+07196h 00                               NOP       
+07197h 218EFD                           LD        HL,BUF_DODATK  ; starszy bajt odczytanej temp. /HEX/
+0719Ah 7E                               LD        A,(HL)
+0719Bh CB7F                             BIT       7,A            ; "1" temperat. ujemna, "0" dodatnia
+0719Dh 2807                             JR        Z,WYS_T_LCD3
+0719Fh 3E2D                             LD        A,2DH          ; znaczek "-" temp. ujemna
+071A1h CD3A20                           CALL      BUSY
+071A4h D3E9                             OUT       (DANA),A
+071A6h                                            
+071A6h            WYS_T_LCD3:                     
+071A6h 2193FD                           LD        HL,BUF_TEMP_PRZEL+1; setki stopni C
+071A9h 7E                               LD        A,(HL)
+071AAh FE00                             CP        0
+071ACh 2813                             JR        Z,WYS_T_LCD    ;temp. < niż 100 stopni
+071AEh                                                           ; temp. >= 100 stopni
+071AEh 3AC1FE                           LD        A,(POZ_T+1)    ; poz. na LCD
+071B1h D3E8                             OUT       (INSTR),A
+071B3h 3E31                             LD        A,31H          ; "1"
+071B5h CD3A20                           CALL      BUSY
+071B8h D3E9                             OUT       (DANA),A       ; wyświetl jedynkę
+071BAh 2B                               DEC       HL
+071BBh 7E                               LD        A,(HL)
+071BCh CD2325                           CALL      WYSW_A         ; dziesiątki i jedn. st. C
+071BFh 1810                             JR        WYS_T_LCD2
+071C1h                                            
+071C1h            WYS_T_LCD:                                     ; wyswietlaj temp. na lcd
+071C1h 2B                               DEC       HL             ; dziesiątki i jedności st. C
+071C2h 7E                               LD        A,(HL)
+071C3h FE10                             CP        10H            ; czy < 9 st. - tylko jedna cyfra przed zerem
+071C5h 3007                             JR        NC,WYS_T_LCD1
+071C7h CD3A20                           CALL      BUSY           ; +
+071CAh D3E9                             OUT       (DANA),A       ; +
+071CCh                                                           ;call wysw_dana
+071CCh 1803                             JR        WYS_T_LCD2
+071CEh                                            
+071CEh            WYS_T_LCD1:                     
+071CEh CD2325                           CALL      WYSW_A
+071D1h            WYS_T_LCD2:                     
+071D1h 3E2E                             LD        A,"."          ; 2E "."
+071D3h CD3A20                           CALL      BUSY
+071D6h D3E9                             OUT       (DANA),A       ; dobij kropke
+071D8h 23                               INC       HL
+071D9h 23                               INC       HL             ; wskazuje dziesiąte st. C
+071DAh 7E                               LD        A,(HL)
+071DBh 0630                             LD        B,30H          ; liczby na LCD od 30-0, 31-1, itd
+071DDh 80                               ADD       A,B
+071DEh 76                               HALT      
+071DFh D3E9                             OUT       (DANA),A
+071E1h                                                           ;call wysw_dana ; zamienia i wyswietla dziesiate st. C na lcd
+071E1h 219972                           LD        HL,ST_C        ; " *C"
+071E4h CD4320                           CALL      WYS_TEKST
+071E7h C9                               RET       
+071E8h                                            
+071E8h            ZNAK_MINUS:                     
+071E8h 218EFD                           LD        HL,BUF_DODATK
+071EBh CB7E                             BIT       7,(HL)
+071EDh C8                               RET       Z              ; temper. dodatnia
+071EEh 0E40                             LD        C,40H          ; znaczek "-"
+071F0h 3A92FD                           LD        A,(0FD92H)
+071F3h FE10                             CP        10H
+071F5h 3805                             JR        C,ZN_1         ; temper. 1. cyfrowa, tzn. <=9 st. C
+071F7h                                                           ; temperat. >= 10 st. C
+071F7h CDAB01                           CALL      COM            ;wyśw. znaku z rej. C
+071FAh 16                               DEFB      16H
+071FBh C9                               RET       
+071FCh            ZN_1:                                          ; temp. jednocyfrowa <= 9 st. C
+071FCh CDAB01                           CALL      COM            ;wyśw. znaku z rej. C
+071FFh 15                               DEFB      15H
+07200h D7                               RST       10H            ; D7 16 wymaż jeden znak
+07201h 16                               DEFB      16H
+07202h C9                               RET       
+07203h                                            
+07203h                                                           ; odczyt i wyświetlenie temp. wg numeru seryjnego DS-a
+07203h            ODCZYT_T:                       
+07203h FD22F0FC                         LD        (ADR_BUF_NS),IY; aktualn. adres w RAM numeru seryjnego DS-a
+07207h DD2195FD                         LD        IX,BUF_TEMP    ; adres RAM dla odczytu temperatury
+0720Bh 22C0FE                           LD        (POZ_T),HL     ; aktualna poz. wyswietl. temp. na LCD
+0720Eh 2E80                             LD        L,L_1W         ; stan niski
+07210h 2682                             LD        H,H_1W         ; stan wysoki
+07212h CD5070                           CALL      INI_1_WIRE
+07215h 1E55                             LD        E,55H          ; MATCH ROM -  zaadresuj ROM układu DS18B20
+07217h CD8370                           CALL      ZAP_1W_1B      ; tylko jeden bajt
+0721Ah FD2AF0FC                         LD        IY,(ADR_BUF_NS); aktualny adres obsługiwanego DS-a
+0721Eh CD8A70                           CALL      ZAP_1W_8B      ; numer seryjny DS-a
+07221h 1E44                             LD        E,44H          ; konwersja temperatury
+07223h CD8370                           CALL      ZAP_1W_1B
+07226h CD6670                           CALL      ACK_1W_1       ; czekaj na zakończenie konwersji
+07229h CD5070                           CALL      INI_1_WIRE
+0722Ch 1E55                             LD        E,55H          ; MATCH ROM
+0722Eh CD8370                           CALL      ZAP_1W_1B
+07231h FD2AF0FC                         LD        IY,(ADR_BUF_NS)
+07235h CD8A70                           CALL      ZAP_1W_8B
+07238h 1EBE                             LD        E,0BEH         ; czytaj "scratchpad"
+0723Ah CD8370                           CALL      ZAP_1W_1B
+0723Dh 0602                             LD        B,2            ; odczytujemy tylko dwa bajty -  temperaturę
+0723Fh CDC470                           CALL      ODCZYT_1W      ; odczyt temperatury i porównanie z poprzednim odczytem
+07242h                                                           ;jr z, ca80_1W_1
+07242h CDEC70                           CALL      KOR_TEMP       ; uwzględnij korekcję
+07245h CDFE70                           CALL      TEST_TEMP      ; dodatnia czy ujemna
+07248h CD1471                           CALL      WYSW_TEMP      ; wyświetl temp. na ca80
+0724Bh CD9171                           CALL      WYSW_NA_LCD    ; na LCD
+0724Eh 3E02                             LD        A,2            ; wart. opoźnienia, ok. 2 sek
+07250h CD5F72                           CALL      OPOZ_MS_2
+07253h C9                               RET       
+07254h                                            
+07254h            WYSW_LICZ_DS:                                  ; wyswietla numer obslugiwanego DS /1, 2, 3  itd
+07254h 3A88FD                           LD        A,(LICZ_DS)    ; wyśw. na ca80 - ktory DS jest obslugiwany
+07257h 4F                               LD        C,A
+07258h CDAB01                           CALL      COM            ;wyśw. znaku z rej. C
+0725Bh 17                               DEFB      17H            ; poz. na ca80 
+0725Ch C9                               RET       
+0725Dh                                            
+0725Dh            OPOZ_750MS:                                    ; opoznienie do następnego odczytu temp.
+0725Dh 3E02                             LD        A,2
+0725Fh            OPOZ_MS_2:                                     ; wcześniej ustaw rej. A na odpow. wartość
+0725Fh F5                               PUSH      AF
+07260h            OPOZ_750_1:                     
+07260h 1160EA                           LD        DE,0EA60H      ; op. ok. 0,39 sek, jesli 0135h to ok. 2 ms
+07263h            OPOZ_750_2:                                    ; 01D0h - 3ms, 0269h - 4 ms
+07263h 1B                               DEC       DE
+07264h 7B                               LD        A,E
+07265h B2                               OR        D
+07266h 20FB                             JR        NZ,OPOZ_750_2
+07268h F1                               POP       AF
+07269h 3D                               DEC       A
+0726Ah F5                               PUSH      AF
+0726Bh 20F3                             JR        NZ,OPOZ_750_1
+0726Dh F1                               POP       AF
+0726Eh C9                               RET       
+0726Fh                                            
+0726Fh            OPOZ_480US:                                    ; opozn. ok. 500 us /mikrosekund/
+0726Fh 3E7D                             LD        A,7DH          ; 8A ok 550 uS
+07271h            O_480US_1:                      
+07271h 3D                               DEC       A
+07272h 20FD                             JR        NZ,O_480US_1
+07274h 3E82                             LD        A,H_1W
+07276h ED79                             OUT       (C),A
+07278h C9                               RET       
+07279h                                            
+07279h            OPOZ_410US:                     
+07279h 3E67                             LD        A,67H
+0727Bh            OP_LICZ:                        
+0727Bh 3D                               DEC       A
+0727Ch 20FD                             JR        NZ,OP_LICZ
+0727Eh C9                               RET       
+0727Fh                                            
+0727Fh            OPOZ_50US:                                     ; przy zapisie "0"
+0727Fh 3E0A                             LD        A,0AH
+07281h 18F8                             JR        OP_LICZ
+07283h                                            
+07283h            OPOZ_36US:                                     ; przy zapisie "1"
+07283h 3E09                             LD        A,9
+07285h 18F4                             JR        OP_LICZ
+07287h                                            
+07287h            OPOZ_24US:                      
+07287h 3E09                             LD        A,9
+07289h 18F0                             JR        OP_LICZ
+0728Bh                                            
+0728Bh            WYL_NMI:                                       ; wyłącz przerwania NMI /obsługa NMI trwa min. ok. 130 uS
+0728Bh 3E09                             LD        A,9            ; ; stan H  ; opoznienia NIE MOGA wykorzystywac HALT i innych procedur zwiazanych z NMI!!!
+0728Dh D3F3                             OUT       (0F3H),A       ; ustaw bit PC4 port 8255 /systemowego/ na "1"
+0728Fh C9                               RET       
+07290h                                            
+07290h            WL_NMI:                                        ; włacz przerwania NMI
+07290h 3E08                             LD        A,8            ; stan L, ustaw bit PC4 na "0"
+07292h D3F3                             OUT       (0F3H),A
+07294h C9                               RET       
+07295h                                            
+07295h                                                           ; znaki na lcd
+07295h 54312020   TEMP1:                DEFM      "T1  "         ; 255;          
+07299h                                                           ;  temp2: defm "T2  ", 255 
+07299h DF432020FF ST_C:                 DEFB      0DFH,43H,20H,20H,255; "*C  " stopni C
+0729Eh            ADR_NS1:                        
+0729Eh BBBBBBBBBB                       DEFS      18H,0BBH       ; zarezerwuj 24 bajty na nr czujników /docelowo 3/
+072B6h                                                           ;adr_NS1: defb  28h, 0C9h, 0CDh, 79h, 0A2h, 0, 3, 0B9h ; "tranzystor" dwie krop
+072B6h                                                           ;adr_NS1: defb  28h, 87h, 14h, 0A2h, 79h, 15h, 3, 2Ch ; "tranz" jedna kropka
+072B6h                                                           ; adr_NS2: defb  28h, 0C9h, 0CDh, 79h, 0A2h, 0, 3, 0B9h ; "tranzystor" dwie kropki
+072B6h                                                           ; adr_NS3: defb  28h, 0E2h, 32h, 5Dh, 4, 0, 0, 85h ; biały         
+072B6h                                                           ; adr_NS4: EQU adr_NS3+8
+072B6h                                                           ; odczyt numeru seryjnego, wpis do RAM
+072B6h            ODCZYT_NS:                                     ;tylko dla JEDNEGO podlaczonego DS18B20!!!
+072B6h DD219E72                         LD        IX,ADR_NS1     ; adres w RAM dla numeru seryjnego 18B20
+072BAh CD8B72                           CALL      WYL_NMI
+072BDh 0608                             LD        B,8            ; ile bajtów odebrać - numer seryjny + CRC
+072BFh 2E80                             LD        L,L_1W         ; stan niski
+072C1h 2682                             LD        H,H_1W         ; stan wysoki
+072C3h CD5070                           CALL      INI_1_WIRE     ; reset DS18B20
+072C6h 1E33                             LD        E,33H          ; rozkaz "czytaj ROM", odczyt bajtów numeru seryjn.
+072C8h CD8370                           CALL      ZAP_1W_1B      ; zapisz bajt do DS
+072CBh                                                           ; call odczyt_1W_NS ; tu - odczyt numeru seryjnego DS18B20
+072CBh                                                           ; ret 
+072CBh                                            
+072CBh                                                           ;odczyt_1W_NS: ; odczyt numeru seryj. DS18B20
+072CBh                                                           ;  call wyl_NMI
+072CBh 0608                             LD        B,8            ; numer ma 8. bajtów
+072CDh            ODCZYT_1W_1_NS:                 
+072CDh 1608                             LD        D,8            ; ile bitów
+072CFh 1E00                             LD        E,0            ; odebrane bity zapisuj w rej. E
+072D1h            ODCZYT_1W_2_NS:                 
+072D1h ED69                             OUT       (C),L          ; stan niski
+072D3h ED61                             OUT       (C),H          ; stan wysoki
+072D5h            OD1_1W_NS:                      
+072D5h 00                               NOP       
+072D6h 00                               NOP       
+072D7h DBE1                             IN        A,(PORT_DS)    ; czytaj port, gdzie podlaczony DS18B20
+072D9h E601                             AND       01H            ; zeruj bity 7 do 1, zostaw bit 0
+072DBh 83                               ADD       A,E
+072DCh 0F                               RRCA      
+072DDh 5F                               LD        E,A            ; zapamietanie
+072DEh CD8772                           CALL      OPOZ_24US
+072E1h 15                               DEC       D              ; licznik bitów
+072E2h 20ED                             JR        NZ,ODCZYT_1W_2_NS
+072E4h DD7300                           LD        (IX),E         ; tylko dla kompilatora ASiede
+072E7h                                                           ;dfb 0DDh, 73h, 0  dla CA80
+072E7h DD23                             INC       IX
+072E9h 05                               DEC       B              ; licznik odbieranych bajtów
+072EAh 20E1                             JR        NZ,ODCZYT_1W_1_NS
+072ECh CD9072                           CALL      WL_NMI
+072EFh C9                               RET       
+072F0h                                            
+072F0h            WYSW_NR_DS:                                    ; wyswietl numer seryjny na LCD i CA80
+072F0h CD0020                           CALL      INI_LCD
+072F3h                                                           ; ld a, L4 ; 4. linia
+072F3h                                                           ; halt
+072F3h                                                           ; out (instr), a
+072F3h                                                           ; ld hl, numer; napis "dalej =  koniec C"
+072F3h                                                           ; call wys_tekst
+072F3h 3E80                             LD        A,L1           ; 1. linia
+072F5h 76                               HALT      
+072F6h D3E8                             OUT       (INSTR),A
+072F8h 216173                           LD        HL,NUMER1
+072FBh            NUMER_DS:                       
+072FBh CD4320                           CALL      WYS_TEKST
+072FEh                                                           ;next_numer: ; ew. odczyt kolejnego numeru, jesli wcisn. =
+072FEh 219E72                           LD        HL,ADR_NS1
+07301h E5                               PUSH      HL
+07302h 1E02                             LD        E,2            ; dwa razy po 4. bajty     
+07304h            NUMER_DS2:                                     ; wyświetlenie 4. bajtów
+07304h D5                               PUSH      DE
+07305h 0604                             LD        B,4            ; . bajtow
+07307h            OD1_1W_NS1:                                    ;
+07307h 7E                               LD        A,(HL)
+07308h CD2325                           CALL      WYSW_A
+0730Bh 3E20                             LD        A,20H
+0730Dh CD3A20                           CALL      BUSY
+07310h D3E9                             OUT       (DANA),A
+07312h 23                               INC       HL
+07313h 10F2                             DJNZ      OD1_1W_NS1
+07315h 3EC4                             LD        A,L2+4
+07317h 76                               HALT      
+07318h D3E8                             OUT       (INSTR),A
+0731Ah D1                               POP       DE
+0731Bh 1D                               DEC       E
+0731Ch 20E6                             JR        NZ,NUMER_DS2   ; wyśw. następne 4. bajty w 2. linii 
+0731Eh                                                           ; wysw. na CA80
+0731Eh E1                               POP       HL             ; poczatek adresu numeru seryjnego 
+0731Fh 0602                             LD        B,2            ; ile bloków bajtow /po 4./ wyswietlic
+07321h            OD1_1W_NS2:                     
+07321h 7E                               LD        A,(HL)
+07322h DF                               RST       18H            ; wysw. rej A
+07323h 26                               DEFB      26H
+07324h 3AFDFF                           LD        A,(CYF6)       ; 6. cyfra
+07327h F680                             OR        80H
+07329h 32FDFF                           LD        (CYF6),A       ; dobicie kropki
+0732Ch 23                               INC       HL
+0732Dh 7E                               LD        A,(HL)
+0732Eh DF                               RST       18H            ; wysw. rej A
+0732Fh 24                               DEFB      24H
+07330h 3AFBFF                           LD        A,(CYF4)       ; 4. cyfra
+07333h F680                             OR        80H
+07335h 32FBFF                           LD        (CYF4),A
+07338h 23                               INC       HL
+07339h 7E                               LD        A,(HL)
+0733Ah DF                               RST       18H            ; wysw. rej A
+0733Bh 22                               DEFB      22H
+0733Ch 3AF9FF                           LD        A,(CYF2)       ; 2. cyfra
+0733Fh F680                             OR        80H
+07341h 32F9FF                           LD        (CYF2),A
+07344h 23                               INC       HL
+07345h 7E                               LD        A,(HL)
+07346h DF                               RST       18H            ; wysw. rej A
+07347h 20                               DEFB      20H
+07348h 3AF7FF                           LD        A,(CYF0)       ;  cyfra 0
+0734Bh F680                             OR        80H
+0734Dh 32F7FF                           LD        (CYF0),A
+07350h 23                               INC       HL
+07351h                                                           ;nastepne 4. bajty 
+07351h C5                               PUSH      BC
+07352h 3E05                             LD        A,5            ; opoznienie ok. 1,5 sek
+07354h CD5F72                           CALL      OPOZ_MS_2
+07357h C1                               POP       BC
+07358h 10C7                             DJNZ      OD1_1W_NS2
+0735Ah CF                               RST       8              ; CF czekaj na klawisz
+0735Bh D7                               RST       10H            ; D7
+0735Ch 20                               DEFB      20H
+0735Dh C30070                           JP        CA80_1W
+07360h                                                           ; od1_1W_ns3:
+07360h                                                           ;  rst 8 ; czekaj na wcisn. klawisza
+07360h                                                           ;  cp 0Ch ; czy klawisz C? - koniec
+07360h                                                           ;  jp z, CA80_1W ; poczatek programu
+07360h                                                           ;  cp 12h ; klawisz =  nastepny czujnik
+07360h                                                           ;  jr z, next_numer1
+07360h                                                           ;  jr od1_1W_ns3
+07360h                                                           ; next_numer1:
+07360h                                                           ;  ld a, L1 ; dolna linia
+07360h                                                           ;  halt   
+07360h                                                           ;  out (instr), a
+07360h                                                           ;  ld hl, numer2
+07360h                                                           ;  jr numer_ds
+07360h                                            
+07360h                                                           ;  numer:   defm "= next DS, C-koniec"
+07360h FF                               DEFB      0FFH           ; koniec tekstu
+07361h 6E723120   NUMER1:               DEFM      "nr1 "
+07365h FF                               DEFB      0FFH
+07366h                                                           ;  numer2:  defm "nr2 "
+07366h FF                               DEFB      0FFH
+07367h DDE2                             DEFB      0DDH,0E2H      ; nazwa programu
+07369h 2044533138                       DEFM      " DS18B20 1.czuj P2",255
+0737Ch                                                           ;END
+0737Ch                                            
+0737Ch                                            
+0737Ch                                            
+0737Ch                                            
+0737Ch                                            
+0737Ch                                            
+0737Ch                                            

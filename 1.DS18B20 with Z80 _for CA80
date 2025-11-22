@@ -1,0 +1,753 @@
+ ; linia DATA DS 18B20 podlaczona do PB0 - port P2 /8255/ w CA80 by phill
+ ; P2 od lewej: DATA, wolny, GND, +5V 
+COM:         EQU 01ABh ; wysw. znaku z rej. C, podać jeszcze PWYS
+EXPR:        EQU 0213h ; pob. liczb/4./ na stos
+CSTS:        EQU 0FFC3h; czy klaw. wcisniety, WYJ - kod w rej. A
+instr:       EQU 0E8h  ; lcd_instrukcja
+DANA:        EQU instr+1 ;0E9h  dana
+LCD_RDR:     EQU instr+3 ;0Ebh
+ 
+USER_PORT0: EQU 0E3h ; slowo kontr. portu uzytkownika 8255
+STOS:       EQU 0FF66h ; pocz. stosu systemowego CA80
+L1:         EQU 80h  ; pocz. 1. linii LCD 4x20 znaków
+L2:         EQU 0C0h ; pocz. 2. linii
+L3:         EQU 94h  ; pocz. 3 linii
+L4:         EQU 0D4h ; pocz. 4. linii
+CYF0:       EQU 0FFF7h
+CYF1:       EQU 0FFF8h ;cyfra do wyswietlania na CA80
+CYF2:       EQU 0FFF9h
+CYF3:       EQU 0FFFAh
+CYF4:       EQU 0FFFBh
+CYF5:       EQU 0FFFCh
+CYF6:       EQU 0FFFDh
+CYF7:       EQU 0FFFEh
+ ;===================
+PRINT:      EQU 01D4H ; wyswietla tekst wg (HL), + PWysw CD D4 01 44
+param:      EQU 01F4h ; pobiera bajty do hl, podać PWYSA
+L_1W:        EQU 80h ; PA, PB, PC - WYJ stan niski
+H_1W:        EQU 82h ; PB - WEJ stan wysoki /rezystor podciagający/, PA, PC - WYJ
+adr_buf_NS:  EQU 0FCF0h ; tu aktualny adres numeru seryjnego
+ ;adr_NS1:     EQU AB ; adres zapisu numeru s; odczyt i wyswietlenie temp. wg numeru seryjnego
+ ;adr_NS3:     EQU adr_NS2+8
+buf_temp:       EQU 0FD95h ; tu zapisuj odczytane temperat.
+buf_temp2:      EQU 0FD97h ; tu zapisz temp., jesli inna niz poprzedni odczyt
+buf_temp_przel: EQU 0FD92h
+buf_kor:        EQU 0FD90h ; wielkosć korekcji
+buf_kor_1:      EQU 0FD80h ; wielkosć korekcji czujnika 1
+buf_kor_2:      EQU 0FD82h ; wielkosć korekcji czujnika 2
+buf_dodatk:     EQU 0FD8Eh ; bufor starsz. bajtu temp., do znaku temperat.
+licz_DS:        EQU 0FD88h ; tutaj numer 1, 2, 3 itd, numer wyswietl. DS
+poz_T:          EQU 0FEC0h ; aktualna poz. wyswietl. temp. na LCD
+poz_T1:         EQU 80h ; pozycja wysw. temp. czujnika T1
+poz_T2:         EQU 8Bh ; pozycja wysw. temp. czujnika T2
+poz_T3:         EQU 0FEC6h ;
+port_DS:        EQU user_port0-2
+ ;poz_t8:         equ 8ah
+AA:             EQU 7000h
+   ; wersja F - dodano wyswietlenie numeru seryjnego - klawisz G
+   ; 80-A,B,C WYJ; 82- A,C WYJ, B WEJ; 8A-A,B WYJ, C0-3 WYJ, C4-7 WEJ; 90-A WEJ, B,C WYJ; 9B-A,B,C WEJ
+  ; WEJ stan H, WYJ stan L
+  ; ver. .9b - tylko jeden czyjnik DS18B20, nowa wersja CA80 , pod P2
+  ORG AA   ; linia DATA DS 18B20 podlaczona do PB0
+ca80_1W:    ; 1WD9b
+  ld sp, 0FF66h
+  ld hl, 0FFFFh
+  ld (buf_temp2), hl  ; potrzebne do ewent. porównania temp., aktualnej i poprzedniej
+  ld c, 63h ; znak stopnia na CA80
+  call COM  ;wysw. znaku z rej. C
+  defb 12h ; PWYS
+  ld c, 39h ; znak "C" Celsjusza
+  call COM ; wysw. zawartosc rejestr C
+  defb  11h ; PWYSW
+  ld hl, 0      ; tu wpisujemy ewentualna korekcje
+  ld (buf_kor), hl ;   np. ld hl, 04A5 - 100 st.C, ld hl, FdB5 - minus 10 st. C
+ temp_dane:
+ ;jr ca80_1W_0 ; jesli pomijamy wysw. na LCD
+  nop
+  nop
+  call ini_lcd  ; ustawia tez kursor na pozycji HOME
+  ld a, 0C3h ; rozkaz C3 JP
+  ld (0FF20h), a ; od FF20 C3 xx (powrot po bledzie ACK)
+  call u_k_home ; ustaw kursor na HOME
+  ld hl, temp1
+  call wys_tekst ; "T1 "
+ ;ld a, poz_t2 ; poz. kursora
+ ;halt   
+ ;out (instr), a
+ ;ld hl, temp2 ; "T2 "
+ ;call wys_tekst
+  ld a, 9bh   ; port A, B, C jako WEJ - stan wysoki
+  out (USER_PORT0),a
+  call odczyt_NS
+ ca80_1W_0: ; 
+  ; pierwszy czujnik, odczyt i wyswietlenie temp. wg numeru seryjnego DS-a
+  ld l, poz_T1 ; poz. "T1 "
+  ld h, poz_T1+3 ; poz. wyswietlanych stopni
+  ;ld hl, poz_T1
+  ld IY, adr_NS1 ;
+  ld a, 6 ; "1" na CA80 -  pierwszy czujnik
+  ld (licz_ds), a
+  call odczyt_T ; odczyt i wyswietl. temp. na CA80 i na LCD
+  call CSTS
+  cp 10h ; klawisz G - czytaj numer seryjny DS-a
+  jp z, WYSW_NR_DS
+    ; drugi czujnik
+ ;ld iy, adr_NS2
+ ;ld l, poz_T2
+ ;ld h, poz_T2+3
+ ;ld hl, poz_T2
+ ;ld a, 5bh ; "2" na CA80 - drugi czujnik
+ ;ld (licz_ds), a
+
+; call odczyt_T
+; call CSTS
+; cp 10h ; klawisz G - czytaj numer seryjny DS-a
+; jp z, ODCZYT_NS
+  jr  ca80_1W_0 ; 
+
+INI_1_WIRE: ; stan niski przez min. 480 us na PB
+  ld c, user_port0 ; złącze użytkownika dodatkowe, słowo steruj. E7
+  out (C), L
+  call opoz_480us ; opoźn. min. 480 us
+  out (C), H ; ustawia "1" na PB, rezystor "podciąga"  do +5V
+  call opoz_36us  ; opóźn.
+ ACK_1W: ; sprawdź linie DQ DS18B20
+  IN A, (port_DS) ; odczyt portu PB
+  BIT 0, A ; testuj bit 0 (0 = potw. obecnosci DS18B20, 1 = brak
+  JR NZ, ACK_1W ; czekaj aż będzie "0" - stan niski
+  call opoz_410uS
+  ret
+
+ACK_1W_1: ; sprawdź linie DQ DS18B20 - czy koniec konwersji temp.
+ ; podciągnięcie linii do +5V przez tranzystor mosfet P
+ ; podłączony np. do  portu C, bit 0 - np. ld a, 0 out (C), a; stan L : ld a, 1 out(C), a; stan H
+  inc b ; B=1    stan wysoki
+  dec c
+  dec c ; C = E5 -> port B
+  out (C), b ; ustaw "1" na bicie 0 portu B- zasilanie DS-a PULLUP
+  call OPOZ_750MS ; opóźn. ok 750 ms
+  dec b ; B = 0 /stan niski
+  call opoz_36uS
+  ret
+
+tabl_temp: ; tablica dziesiątych st. C
+ defb 0, 0, 1, 2, 2, 3, 4, 4, 5, 5, 6, 7, 7, 8, 9, 9, ; to wyswietla na ca80
+   ;  0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F ; to odczyt z DS18B20
+
+zap_1W_1B: ; zapisz jeden bajt do DS18B20
+  ld b, 1 ;1. bajt
+  call wyl_NMI
+  jr zap_1W_A1
+
+zap_1W_8B:;wpis numeru seryjnego do DS-ów  /8 - bajtów/
+  ld b, 8 ; il. bajtów numeru seryjnego DS-a
+  call wyl_NMI
+ zap_1W_A:
+  xor A  ; wyzeruj CARRY, potrzebne przy wysyłaniu bitów
+  ld e, (IY) ; tylko dla Aside, dla assemblera C32  FD 5E 00
+ zap_1w_A1:
+  ld d, 8 ; ile bitów wysłać
+ zap_1W_A2:
+  ld a, e ; w rej. E bajt do zapisu
+  RRA ; od najmłodszego bitu
+  ld e, a ; zapamiętanie
+  jr nc, zap_1w_A0   ; zapisz "0"
+      ; zapisz - wyslij "jedynkę" do DS18B20
+  nop
+  nop
+  out (C), L  ; początek slotu
+  out (C), H
+  call  opoz_36uS
+  dec d  ; czy ostatni bit?
+  jr nz, zap_1w_A2 ; nie
+  inc IY
+  dec b  ; czy ostatni bajt?
+  jr nz, zap_1W_A ; nie
+ zap_1W_back: ; powrót po zapisie
+  call wl_NMI
+  ret
+
+zap_1w_A0: ; zapis "0" stan niski
+  nop
+  nop
+  out (C), L   ;początek slotu
+  call opoz_50us
+  out (C), H ; poprawka wer. g
+  dec d  ; czy ostatni bit
+  jr nz, ZAP_1W_A2
+  out (C), H
+  inc IY
+  dec b; czy ostatni bajt?
+  jr nz, zap_1W_A
+  jr zap_1W_back
+
+odczyt_1W: ; odczyt bajtu z DS18B20, rej. B ile bajtów
+ ;IX wskazuje BUF_TEMP ; tu zapisuj odebrane bajty
+ odczyt_1W_1:
+  call wyl_NMI
+ od1_1W0:
+  ld d, 8 ; ile bitów
+  ld e, 0 ; odebrane bity zapisuj w rej. E
+ odczyt_1W_2:
+  out (C), L ; stan niski
+  out (C), H  ; stan wysoki 
+ od1_1W:
+  nop
+  nop
+  in A, (port_DS); odczytaj port, gdzie podłączony DS18B20
+  AND 01h ; zeruj bity 7 do 1, zostaw bit 0
+  add a, e
+  RRCA
+  ld e, a ; zapamiętanie
+  call opoz_24us
+  dec d ; licznik bitów
+  jr nz, odczyt_1W_2
+  ld (IX), e ; tylko dla kompilatora ASiede   ;dfb 0DDh, 73h, 0  dla CA80
+  inc ix
+  dec b ; licznik odbieranych bajtów
+  jr nz, od1_1W0
+  call  wl_NMI
+  ret
+
+kor_temp: ; korekcja temper. i zamiana starszego bajtu z młodszym, ułatwia dodawanie
+  xor a         ; FDBO  ok. -14 st.C, 04B0 ok. +90 st. C
+  ld hl, (buf_temp)
+  ld bc, (buf_kor); wielkosć korekcji
+  adc hl, bc
+  ld (buf_temp), hl
+  ld a, h ; zapamiętanie: setki, dzies, jedn
+  ld (buf_dodatk), a ; do wysw. ew. znaku "-" na lcd, gdy temp. ujemna
+  ret
+
+      test_temp: ;czy temp. dodatnia czy ujemna, jesli ujemna zrób konwersje
+  ld hl,buf_temp+1
+  ld a, (hl) ; starszy bajt temp.
+  bit 7,a ; wskaznik temperatury, jesli 1 to temp. minusowa, zero to temp.plusowa
+  jr nz, test3 ; temp. ujemna
+  ret
+            ; konwersja temp. w uzupełnieniu do 2. jesli temp. jest ujemna
+   test3:
+  ld hl, 0
+  ld bc, (buf_temp)
+  sbc hl, bc
+     test1:
+  ld (buf_temp), hl ; przeniesienie wyniku, zapamiętanie
+  ret
+
+      wysw_temp: ; przeliczenie i wyswietlenie temperatury na ca80
+ rst 10h ; d7 34 czysc wyswietl. CA80
+ defb 34h ; PWYSW , zostawia znak stopnia i C
+ ld hl, buf_temp+1 ;
+ ld a, (hl) ; starszy bajt odczyt. temp - setki, dzisiątki i jednosci
+ ld b, a
+ ld hl, 0 ; czysć rejestry do obliczeń
+ cp 0
+ jr z, t2_1W  ; <= niż 9 st.C
+   obl_t4_1w:
+ ld a, 16h
+ add a, l
+ daa
+ ld l, a
+ jr c, obl_t3_1w
+    t5_1W:
+ djnz obl_t4_1W
+ jr t2_1w
+    obl_t3_1W:
+ inc h ; temp. >= niż 100 st.C
+ jr t5_1w
+
+   t2_1W: ; wyswietlenie temperatury
+ ld a, (buf_temp)
+ push AF ; do wyliczenia dziesiątych st. C
+ and 0F0h
+ rra
+ rra
+ rra
+ rra
+ cp 0Ah
+ jr c, t2_1W_1
+ ld b, 0FAh ; zamiana liczby >= od A na dziesiętną
+ sub b
+    t2_1W_1: ; dodaj temp. z mnożenia x 16 z jedn. z FD95
+ add a, L
+ daa
+ ld L, a
+ jr nc, t2_1W_2
+ inc h ;zwiększ H o 1, bo temp >= 100 st. C; jesli np. L = 96 i dodano np. 5
+
+       t2_1W_2:
+ ld (buf_temp_przel), hl ;zapamiętanie - setki, dziesiątki, jednosci
+ pop AF
+ and 0Fh ;usuń starsze bity
+ ld hl, tabl_temp ; tablica musi leżeć w obrębie strony
+ add a, l ; wyliczenie adresu
+ ld l, a
+ ld a,(hl) ; pobranie dziesiątych stopnia z tablicy
+ ld (buf_temp_przel+2), a  ; zapamiętanie dziesiątych st. C /dla LCD/
+ push af
+ call wysw_licz_ds ; wysw. ktory DS jest obslugiwany na PWYSW 17
+ pop af
+ rst 18h ; wysw. A - dziesiąte stopnia
+ defb 23h ; PWYSW
+ xor a ; zeruj rej. A
+ ld hl, (buf_temp_przel) ; temperatura: H-setki, L-dziesiątki i jednosci
+  cp h ; czy >= 100 st. C
+  jr z, obl_t5 ; tzn. < od 100 st.
+   ; wyswietl "1"
+  ld c, 6 ; "1"
+  call COM
+  defb 16h ; PWYS
+  ld a, l ; dziesiątki i jednosci
+  rst 18h     ; wyswietl rej. A
+  defb 24h ; PWYS
+  jr dob_kropki ; dobicie kropki na wysw. ca80
+
+   obl_t5:
+  ld a, l   ; dziesiątki i jednosci
+  and 0F0h
+  jr nz, obl_t6 ; temp. >= 10 st. C
+  xor a   ; likwidacja zera przed cyfrą znaczącą
+  ld (CYF4), a
+  ld c, l
+  call 1E0h
+  defb 14h;
+  jr dob_kropki
+    obl_t6:
+  ld a, l
+  rst 18h ; DF24
+  defb 24h ; PWYS
+    dob_kropki:
+  ld a, (0FFFbh)
+  or 80h
+  ld (0FFFBh), a
+  call znak_minus
+  call opoz_750ms ; nastepny odczyt
+  ret
+    ;pocz.  obslugi LCD
+    wysw_na_LCD: ; wysw. temp. na LCD
+  ;ld e, 4eh ; adres PCF i2C dla "lcd"
+  ;call start2 ; bez czyszcz. lcd, można wpisywać znaki na lcd
+  ld a, (poz_T+1) ; poz. wysw. temperatury
+  out (instr), a
+  nop
+  ld hl, buf_dodatk ; starszy bajt odczytanej temp. /HEX/
+  ld a, (hl)
+  bit 7, a  ; "1" temperat. ujemna, "0" dodatnia
+  jr z, wys_t_lcd3
+  ld a, 2Dh ; znaczek "-" temp. ujemna
+  call busy   
+  out (dana), a
+
+       wys_t_lcd3:
+  ld hl, buf_temp_przel+1 ; setki stopni C
+  ld a, (hl)
+  cp 0
+  jr z, wys_t_lcd ;temp. < niż 100 stopni
+    ; temp. >= 100 stopni
+  ld a, (poz_T+1) ; poz. na LCD
+  out (instr), A
+  ld a, 31h ; "1"
+  call busy   
+  out (dana), a ; wyswietl jedynkę
+  dec hl
+  ld a, (hl)
+  call wysw_A ; dziesiątki i jedn. st. C
+  jr wys_t_lcd2
+
+    wys_t_lcd: ; wyswietlaj temp. na lcd
+  dec hl    ; dziesiątki i jednosci st. C
+  ld a, (hl)
+  cp 10h ; czy < 9 st. - tylko jedna cyfra przed zerem
+  jr nc, wys_t_lcd1
+  call busy ; +
+  out (dana), a ; +
+  ;call wysw_dana
+  jr wys_t_lcd2
+
+     wys_t_lcd1:
+  call wysw_A
+      wys_t_lcd2:
+  ld a, "." ; 2E "."
+  call busy   
+  out (dana), a ; dobij kropke
+  inc hl
+  inc hl  ; wskazuje dziesiąte st. C
+  ld a, (hl)
+  ld b, 30h  ; liczby na LCD od 30-0, 31-1, itd
+  add a, b
+  halt
+  out (dana), a
+  ;call wysw_dana ; zamienia i wyswietla dziesiate st. C na lcd
+  ld hl, st_c ; " *C"
+  call wys_tekst
+  ret
+
+znak_minus:
+  ld hl, buf_dodatk
+  bit 7, (hl)
+  ret z  ; temper. dodatnia
+  ld c, 40h ; znaczek "-"
+  ld a, (0FD92h)
+  cp 10h
+  jr c, zn_1 ; temper. 1. cyfrowa, tzn. <=9 st. C
+     ; temperat. >= 10 st. C
+  call COM ;wysw. znaku z rej. C
+  defb 16h
+  ret
+   zn_1: ; temp. jednocyfrowa <= 9 st. C
+  call COM ;wysw. znaku z rej. C
+  defb 15h
+  rst 10h ; D7 16 wymaż jeden znak
+  defb 16h
+  ret
+
+; odczyt i wyswietlenie temp. wg numeru seryjnego DS-a
+odczyt_T:
+ ld (adr_buf_NS), IY ; aktualn. adres w RAM numeru seryjnego DS-a
+ ld ix, buf_temp ; adres RAM dla odczytu temperatury
+ ld (poz_T), hl ; aktualna poz. wyswietl. temp. na LCD
+ ld L, L_1W ; stan niski
+ ld H, H_1W ; stan wysoki
+ call ini_1_WIRE
+ ld e, 55h ; MATCH ROM -  zaadresuj ROM układu DS18B20
+ call zap_1W_1B; tylko jeden bajt
+ ld iy, (adr_buf_NS) ; aktualny adres obsługiwanego DS-a
+ call ZAP_1W_8B ; numer seryjny DS-a
+ ld e, 44h ; konwersja temperatury
+ call zap_1w_1B
+ call ACK_1W_1 ; czekaj na zakończenie konwersji
+ call ini_1_wire
+ ld e, 55h ; MATCH ROM
+ call zap_1W_1B
+ ld iy, (adr_buf_NS)
+ call ZAP_1W_8B
+ ld e, 0BEh ; czytaj "scratchpad"
+ call zap_1W_1B
+ ld b, 2  ; odczytujemy tylko dwa bajty -  temperaturę
+ call odczyt_1W ; odczyt temperatury i porównanie z poprzednim odczytem
+ ;jr z, ca80_1W_1
+ call kor_temp ; uwzględnij korekcję
+ call test_temp ; dodatnia czy ujemna
+ call wysw_temp; wyswietl temp. na ca80
+ call wysw_na_LCD ; na LCD
+ ld a, 2 ; wart. opoźnienia, ok. 2 sek
+ call opoz_ms_2
+ ret
+
+wysw_licz_ds: ; wyswietla numer obslugiwanego DS /1, 2, 3  itd
+  ld a, (licz_ds) ; wysw. na ca80 - ktory DS jest obslugiwany
+  ld c, a
+  call COM ;wysw. znaku z rej. C
+  defb 17h ; poz. na ca80 
+  ret
+
+opoz_750mS:  ; opoznienie do następnego odczytu temp.
+  ld a, 2
+ opoz_ms_2: ; wczesniej ustaw rej. A na odpow. wartosć
+  push af
+opoz_750_1:
+  ld de, 0EA60h  ; op. ok. 0,39 sek, jesli 0135h to ok. 2 ms
+opoz_750_2:    ; 01D0h - 3ms, 0269h - 4 ms
+  dec de
+  ld a, e
+  or d
+  jr nz, opoz_750_2
+  pop af
+  dec a
+  push af
+  jr nz, opoz_750_1
+  pop af
+  ret
+
+opoz_480us: ; opozn. ok. 500 us /mikrosekund/
+  ld a, 7dh ; 8A ok 550 uS
+ o_480us_1:
+  dec a
+  jr nz, o_480us_1
+  ld a, H_1W
+  out (C), a
+  ret
+
+opoz_410uS:
+  ld a, 67h
+ op_licz:
+  dec a
+  jr nz, op_licz
+  ret
+
+opoz_50us: ; przy zapisie "0"
+  ld a, 0Ah
+  jr op_licz
+
+opoz_36us:  ; przy zapisie "1"
+  ld a, 9
+  jr op_licz
+
+opoz_24uS:
+  ld a, 9
+  jr op_licz
+
+wyl_NMI: ; wyłącz przerwania NMI /obsługa NMI trwa min. ok. 130 uS
+  ld a, 9; ; stan H  ; opoznienia NIE MOGA wykorzystywac HALT i innych procedur zwiazanych z NMI!!!
+  out (0F3h), a  ; ustaw bit PC4 port 8255 /systemowego/ na "1"
+  ret
+
+wl_NMI: ; włacz przerwania NMI
+  ld a, 8 ; stan L, ustaw bit PC4 na "0"
+  out (0F3h), a
+  ret
+ 
+; znaki na lcd
+temp1: defm "T1  "; 255;          
+;  temp2: defm "T2  ", 255 
+st_C:  defb 0dfh, 43h, 20h, 20h, 255 ; "*C  " stopni C
+adr_NS1:
+ defs 18h, 0bbh ; zarezerwuj 24 bajty na nr czujników /docelowo 3/
+ ;adr_NS1: defb  28h, 0C9h, 0CDh, 79h, 0A2h, 0, 3, 0B9h ; "tranzystor" dwie krop
+ ;adr_NS1: defb  28h, 87h, 14h, 0A2h, 79h, 15h, 3, 2Ch ; "tranz" jedna kropka
+; adr_NS2: defb  28h, 0C9h, 0CDh, 79h, 0A2h, 0, 3, 0B9h ; "tranzystor" dwie kropki
+; adr_NS3: defb  28h, 0E2h, 32h, 5Dh, 4, 0, 0, 85h ; biały         
+ ; adr_NS4: EQU adr_NS3+8
+   ; odczyt numeru seryjnego, wpis do RAM
+odczyt_NS: ;tylko dla JEDNEGO podlaczonego DS18B20!!!
+  ld ix, adr_NS1 ; adres w RAM dla numeru seryjnego 18B20
+  call wyl_NMI
+  ld b, 8 ; ile bajtów odebrać - numer seryjny + CRC
+  ld l, L_1W ; stan niski
+  ld h, H_1W ; stan wysoki
+  call ini_1_wire ; reset DS18B20
+  ld e, 33h ; rozkaz "czytaj ROM", odczyt bajtów numeru seryjn.
+  call  ZAP_1W_1B ; zapisz bajt do DS
+ ; call odczyt_1W_NS ; tu - odczyt numeru seryjnego DS18B20
+ ; ret 
+     
+;odczyt_1W_NS: ; odczyt numeru seryj. DS18B20
+;  call wyl_NMI
+  ld b, 8 ; numer ma 8. bajtów
+ odczyt_1W_1_ns:
+  ld d, 8 ; ile bitów
+  ld e, 0 ; odebrane bity zapisuj w rej. E
+ odczyt_1W_2_ns:
+  out (C), L ; stan niski
+  out (C), H  ; stan wysoki
+od1_1W_ns:
+  nop
+  nop
+  in A, (port_ds); czytaj port, gdzie podlaczony DS18B20
+  AND 01h ; zeruj bity 7 do 1, zostaw bit 0
+  add a, e
+  RRCA
+  ld e, a ; zapamietanie
+  call opoz_24us
+  dec d ; licznik bitów
+  jr nz, odczyt_1W_2_ns
+  ld (IX), e ; tylko dla kompilatora ASiede
+  ;dfb 0DDh, 73h, 0  dla CA80
+  inc ix
+  dec b ; licznik odbieranych bajtów
+  jr nz, odczyt_1W_1_ns
+  call  wl_NMI
+  ret
+
+wysw_nr_DS:     ; wyswietl numer seryjny na LCD i CA80
+  call ini_lcd
+ ; ld a, L4 ; 4. linia
+ ; halt
+ ; out (instr), a
+ ; ld hl, numer; napis "dalej =  koniec C"
+ ; call wys_tekst
+  ld a, L1 ; 1. linia
+  halt
+  out (instr), a
+  ld hl, numer1
+ numer_ds:
+  call wys_tekst
+ ;next_numer: ; ew. odczyt kolejnego numeru, jesli wcisn. =
+  ld hl, adr_NS1
+  push hl
+  ld e, 2 ; dwa razy po 4. bajty     
+ numer_ds2: ; wyswietlenie 4. bajtów
+  push de
+  ld b, 4 ; . bajtow
+ od1_1W_ns1: ;
+  ld a, (hl)
+  call wysw_A
+  ld a, 20h
+  call busy   
+  out (dana), a
+  inc hl
+  djnz od1_1W_ns1
+  ld a, L2+4
+  halt   
+  out (instr), a
+  pop de
+  dec e
+  jr nz, numer_ds2 ; wysw. następne 4. bajty w 2. linii 
+       ; wysw. na CA80
+  pop hl ; poczatek adresu numeru seryjnego 
+  ld b, 2 ; ile bloków bajtow /po 4./ wyswietlic
+ od1_1W_ns2:
+  ld a, (hl)
+  rst 18h ; wysw. rej A
+  defb 26h
+  ld a, (CYF6) ; 6. cyfra
+  or 80h
+  ld (CYF6), a ; dobicie kropki
+  inc hl
+  ld a, (hl)
+  rst 18h ; wysw. rej A
+  defb 24h
+  ld a, (CYF4) ; 4. cyfra
+  or 80h
+  ld (CYF4), a
+  inc hl
+  ld a, (hl)
+  rst 18h ; wysw. rej A
+  defb 22h
+  ld a, (CYF2) ; 2. cyfra
+  or 80h
+  ld (CYF2), a
+  inc hl
+  ld a, (hl)
+  rst 18h ; wysw. rej A
+  defb 20h
+  ld a, (CYF0) ;  cyfra 0
+  or 80h
+  ld (CYF0), a
+  inc hl
+      ;nastepne 4. bajty 
+  push bc
+  ld a, 5 ; opoznienie ok. 1,5 sek
+  call opoz_ms_2
+  pop bc
+  djnz od1_1W_ns2
+  rst 8 ; CF czekaj na klawisz
+  rst 10h ; D7
+  defb 20h 
+  jp CA80_1W
+
+;podprogram obslugi I2C_LCD - sterownie 8-bitowe LCD polaczone z Z80 DIRECT
+ini_lcd:
+  ld a, 30h ;
+  out (instr),a
+  halt
+  halt
+  halt
+  ld a, 30h
+  out (instr),a
+  call op_100us
+  call op_100us
+  ld a, 30h
+  out (instr),a
+  call op_100us
+  ld a, 38h ; sterowanie 8-bit
+  out (instr),a
+  call busy
+  ld a, 1 ; czysc LCD
+  out (instr),a
+  halt
+  halt
+  call op_100us
+  ld a, 0Eh ; kursor na dole i wlacz LCD
+  out (instr),a
+  call op_100us
+  ld a, 6
+  out (instr),a
+  ret    ; powrot z podprogramu ini_lcd
+
+op_100uS:
+  ld a, 80h
+  op2:
+  dec a
+  jr nz, op2
+  ret
+
+busy:
+   push af
+ ; busy1:
+ ;  in a,(LCD_BUSY)
+ ;  and 80h
+ ;  jr nz, busy1   ; zmiana - gdy brak LCD, to program zatrzymuje się w tym miejscu
+   call op_100uS
+   nop
+   nop
+   nop
+   pop af
+   ret
+
+WYS_tekst: ; wysw. tekst /górne linie/ wg (hl), koniec tekstu FF
+  ld a, (hl)
+  cp 0FFH
+  ret z
+  call busy
+  out (DANA), A
+  inc hl
+  jr WYS_tekst
+
+wysw_A: ; wyswietla zaw. rej A na lcd, wg aktualn. stanu lcd
+  push hl
+  call rozdziel
+  ld a, L
+  call busy
+  out (DANA), A
+  ld a, H
+  call busy
+  out (DANA), A
+  pop hl
+  ret
+ROZDZIEL: ; dzieli rej. A na dwie liczby/znaki i umieszcza w HL
+  PUSH BC ; ochrona rej. BC
+  PUSH AF
+  AND 0F0H; usuń młodsze bity
+  RRCA ; na prawo
+  RRCA
+  RRCA
+  RRCA
+  CALL ZAMIEN; zamienia litery na cyfry, cyfry bez zmian
+  LD L, A
+  POP AF
+  AND 0FH ; usuń starsze bity
+  CALL ZAMIEN
+  LD H, A
+  POP BC ; odtwórz rej. BC
+  RET
+
+ZAMIEN: ; zamiana cyfr hex na ASCII, wg ZEGAR
+     ; do wyswietlania na LCD
+  CP 0AH    ; litera czy cyfra - cyfry <= 9, litery > 9
+  SBC A,69H ;JR C, CYFRA; w A liczba <= od 9
+  DAA
+  RET
+czysc_LCD:
+ ld a, 1
+  call busy
+  out (instr), A
+  halt
+ u_k_home: ; ustaw kursor na pocz. LCD, linie górne
+  ld a, L1
+  call busy
+  out (instr), A
+  ret
+; od1_1W_ns3:
+;  rst 8 ; czekaj na wcisn. klawisza
+;  cp 0Ch ; czy klawisz C? - koniec
+;  jp z, CA80_1W ; poczatek programu
+;  cp 12h ; klawisz =  nastepny czujnik
+;  jr z, next_numer1
+;  jr od1_1W_ns3
+; next_numer1:
+;  ld a, L1 ; dolna linia
+;  halt   
+;  out (instr), a
+;  ld hl, numer2
+;  jr numer_ds
+ 
+;  numer:   defm "= next DS, C-koniec"
+    defb 0ffh ; koniec tekstu
+  numer1:  defm "nr1 " 
+           defb 0ffh
+;  numer2:  defm "nr2 "
+           defb 0ffh
+  defb 0DDh, 0E2h ; nazwa programu
+  defm " DS18B20 1.czuj P2", 255
+           ;END   
