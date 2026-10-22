@@ -1,0 +1,1133 @@
+00000h                                                           ; ==============================================================================
+00000h                                                           ; BLOK 1: SZUKAJ_ROM (Algorytm WG Maxim AN187 ze sprawdzaniem sumy kontrolnej CRC)
+00000h                                                           ; ==============================================================================  
+00000h                                                           ; ZMIENNE W RAM CA80
+00000h            DEVICE_COUNT:         EQU       0FD60H         ; Oficjalny licznik urz¹dzeñ wymagany przez projekt
+00000h            LICZBA_CZUJNIKOW:     EQU       0FD61H         ; Lokalny licznik przebiegu pêtli algorytmu
+00000h            OSTATNIA_ROZBIEZNOSC: EQU       0FD62H         ; Pozycja ostatniej wykrytej rozbie¿noœci (0-64)
+00000h            OSTATNIE_ZERO:        EQU       0FD63H         ; Pomocnicza pozycja œcie¿ki zerowej
+00000h            FLAGA_OSTATNIEGO:     EQU       0FD64H         ; Znacznik zakoñczenia sprawdzania ca³ego drzewa ID
+00000h            BIEZACY_WSKAZNIK:     EQU       0FD65H         ; 16-bitowy wskaŸnik zapisu kolejnego ID pod NR_ID
+00000h            TYMCZASOWY_ID:        EQU       0FD67H         ; 8-bajtowy bufor na aktualnie budowany numer seryjny
+00000h            NR_ID:                EQU       0FD70H         ; TU ZAPISUJ ODCZYTANE BAJTY NUMERU SERYJNEGO
+00000h            SENSOR1_ROM:          EQU       NR_ID          ; WskaZnik na adres ROM pierwszego czujnika w RAM
+00000h                                            
+00000h            LOW:                  EQU       80H            ; STAN NISKI - L
+00000h            HIGH:                 EQU       82H            ; STAN WYSOKI - H
+00000h            CTRL:                 EQU       0E3H           ; SLOWO KONTROLNE 8255
+00000h            PORT_DS:              EQU       0E1H           ; TU PODLACZONY DS18B20   port B (PB0)
+00000h            PRINT:                EQU       01D4H          ; WYSWIETL KOMUNIKAT WG (HL)
+00000h                                            
+00000h                                  ORG       #C000
+0C000h                                            
+0C000h            SZUKAJ_ROM_START:               
+0C000h CDBCC1                           CALL      NMI_OFF        ; Zablokowanie przerwañ NMI na czas komunikacji      
+0C003h                                                           ;  czyszczenie zmiennych w RAM przed startem (likwidacja smieci)
+0C003h AF                               XOR       A
+0C004h 3260FD                           LD        (DEVICE_COUNT),A
+0C007h 3261FD                           LD        (LICZBA_CZUJNIKOW),A
+0C00Ah 3262FD                           LD        (OSTATNIA_ROZBIEZNOSC),A
+0C00Dh 3263FD                           LD        (OSTATNIE_ZERO),A
+0C010h 3264FD                           LD        (FLAGA_OSTATNIEGO),A
+0C013h                                            
+0C013h                                                           ; Ustawienie pocz¹tkowego wskaŸnika zapisu unikalnych ID (0FD70h)
+0C013h 2170FD                           LD        HL,NR_ID
+0C016h 2265FD                           LD        (BIEZACY_WSKAZNIK),HL
+0C019h                                            
+0C019h            PETLA_GLOWNA_SZUKANIA:          
+0C019h                                                           ; Jeœli flaga ostatniego urz¹dzenia jest ustawiona, koñczymy szukanie
+0C019h 3A64FD                           LD        A,(FLAGA_OSTATNIEGO)
+0C01Ch A7                               AND       A
+0C01Dh C2D5C0                           JP        NZ,KONIEC_SZUKANIA
+0C020h                                            
+0C020h                                                           ; --- Krok 1: Sygna³ Reset i test Presence ---
+0C020h CD0FC1                           CALL      OW_RESET
+0C023h A7                               AND       A              ; Czy A = 0? (0 oznacza wykrycie obecnoœci czujnika)
+0C024h C2D5C0                           JP        NZ,KONIEC_SZUKANIA; Jeœli brak odpowiedzi, koñczymy pracê
+0C027h                                            
+0C027h                                                           ; --- Krok 2: Wys³anie komendy SEARCH ROM (0xF0) ---
+0C027h 3EF0                             LD        A,0F0H
+0C029h CD2DC1                           CALL      OW_ZAPISZ_BAJT
+0C02Ch                                            
+0C02Ch                                                           ; --- Krok 3: Inicjalizacja zmiennych pêtli bitowej (64 bity) ---
+0C02Ch AF                               XOR       A
+0C02Dh 3263FD                           LD        (OSTATNIE_ZERO),A
+0C030h 4F                               LD        C,A            ; C = indeks aktualnego bajtu ID (0 do 7)
+0C031h 1601                             LD        D,1            ; D = maska bitowa w bajcie (bit 0)
+0C033h                                            
+0C033h                                                           ; Wyczyszczenie bufora TYMCZASOWY_ID w RAM 
+0C033h                                                           ; Wyczyszczenie 8 bajtów TYMCZASOWY_ID
+0C033h 2167FD                           LD        HL,0FD67H
+0C036h 0608                             LD        B,8
+0C038h AF                               XOR       A
+0C039h            P1:                             
+0C039h 77                               LD        (HL),A
+0C03Ah 23                               INC       HL
+0C03Bh 10FC                             DJNZ      P1
+0C03Dh                                            
+0C03Dh 0640                             LD        B,64           ; Licznik 64 bitów dla PETLA_BITOWA
+0C03Fh 1E01                             LD        E,1            ; E = Numer bie¿¹cego bitu (1 do 64)
+0C041h                                            
+0C041h            PETLA_BITOWA:                   
+0C041h C5                               PUSH      BC             ; Zachowaj licznik bitów (B) i indeks bajtu (C)
+0C042h                                            
+0C042h                                                           ; Odczyt pierwszego bitu (w³aœciwego)
+0C042h CD58C1                           CALL      OW_ODCZYTAJ_BIT
+0C045h 67                               LD        H,A            ; H = bit w³aœciwy
+0C046h                                            
+0C046h                                                           ; Odczyt drugiego bitu (zanegowanego)
+0C046h CD58C1                           CALL      OW_ODCZYTAJ_BIT
+0C049h 6F                               LD        L,A            ; L = bit zanegowany
+0C04Ah                                            
+0C04Ah                                                           ; Analiza stanów bitów wed³ug noty Maxim AN187
+0C04Ah 7C                               LD        A,H
+0C04Bh A7                               AND       A
+0C04Ch C2D0C0                           JP        NZ,SPRAWDZ_CZY_J00; rozbieznosc
+0C04Fh                                            
+0C04Fh 7D                               LD        A,L
+0C050h A7                               AND       A
+0C051h 201E                             JR        NZ,SCIEZKA_ZERO; H=0, L=1 -> Wszystkie urz¹dzenia maj¹ tu bit 0
+0C053h                                            
+0C053h                                                           ; Przypadek H=0, L=0 -> Rozbie¿noœæ (czêœæ czujników ma 0, czêœæ 1)
+0C053h 7B                               LD        A,E
+0C054h 47                               LD        B,A
+0C055h 3A62FD                           LD        A,(OSTATNIA_ROZBIEZNOSC)
+0C058h B8                               CP        B
+0C059h 3812                             JR        C,WYBIERZ_ZERO
+0C05Bh 281A                             JR        Z,WYBIERZ_JEDEN
+0C05Dh                                            
+0C05Dh D5                               PUSH      DE
+0C05Eh 2167FD                           LD        HL,TYMCZASOWY_ID
+0C061h C5                               PUSH      BC
+0C062h 0600                             LD        B,0
+0C064h 09                               ADD       HL,BC
+0C065h C1                               POP       BC
+0C066h 7E                               LD        A,(HL)
+0C067h A2                               AND       D
+0C068h D1                               POP       DE
+0C069h 200C                             JR        NZ,SCIEZKA_JEDEN
+0C06Bh 1804                             JR        SCIEZKA_ZERO
+0C06Dh                                            
+0C06Dh            WYBIERZ_ZERO:                   
+0C06Dh 7B                               LD        A,E
+0C06Eh 3263FD                           LD        (OSTATNIE_ZERO),A
+0C071h                                            
+0C071h            SCIEZKA_ZERO:                   
+0C071h AF                               XOR       A
+0C072h CD70C1                           CALL      OW_ZAPISZ_BIT
+0C075h 1812                             JR        KONIEC_KROKU_BITU
+0C077h                                            
+0C077h            WYBIERZ_JEDEN:                  
+0C077h            SCIEZKA_JEDEN:                  
+0C077h 3E01                             LD        A,1
+0C079h CD70C1                           CALL      OW_ZAPISZ_BIT
+0C07Ch D5                               PUSH      DE
+0C07Dh 2167FD                           LD        HL,TYMCZASOWY_ID
+0C080h C5                               PUSH      BC
+0C081h 0600                             LD        B,0
+0C083h 09                               ADD       HL,BC
+0C084h C1                               POP       BC
+0C085h 7E                               LD        A,(HL)
+0C086h B2                               OR        D
+0C087h 77                               LD        (HL),A
+0C088h D1                               POP       DE
+0C089h                                            
+0C089h            KONIEC_KROKU_BITU:              
+0C089h C1                               POP       BC             ; Przywróæ licznik bitów i indeks bajtu
+0C08Ah                                            
+0C08Ah                                                           ; Aktualizacja maski bitowej D dla nastêpnego bitu w bajcie
+0C08Ah CB22                             SLA       D
+0C08Ch C292C0                           JP        NZ,SKOK_NAST_BIT
+0C08Fh 1601                             LD        D,1
+0C091h 0C                               INC       C
+0C092h                                            
+0C092h            SKOK_NAST_BIT:                  
+0C092h 1C                               INC       E              ; Zwiêksz numer rozpatrywanego bitu (1-64)
+0C093h 05                               DEC       B              ; Bezpieczna pêtla dekrementacji (zastêpuje DJNZ)
+0C094h 20AB                             JR        NZ,PETLA_BITOWA
+0C096h                                            
+0C096h                                                           ; --- KROK WERYFIKACJI SUMY KONTROLNEJ CRC-8 ---
+0C096h CDE1C0                           CALL      OBLICZ_CRC_ID
+0C099h A7                               AND       A
+0C09Ah C2BEC0                           JP        NZ,POMIN_BLEDNY_ROM; Jeœli wynik != 0, suma CRC jest niepoprawna! Odrzuæ czujnik.
+0C09Dh                                            
+0C09Dh                                                           ; Zapis pomyœlnie zweryfikowanego ID do bazy danych RAM (0FDA0h + ...)
+0C09Dh C5                               PUSH      BC
+0C09Eh 2167FD                           LD        HL,TYMCZASOWY_ID
+0C0A1h 3A65FD                           LD        A,(BIEZACY_WSKAZNIK)
+0C0A4h 5F                               LD        E,A
+0C0A5h 3A66FD                           LD        A,(BIEZACY_WSKAZNIK+1)
+0C0A8h 57                               LD        D,A            ; DE = Aktualna pozycja zapisu w RAM
+0C0A9h 010800                           LD        BC,8
+0C0ACh EDB0                             LDIR                     ; Skopiuj 8 bajtów kodu ID czujnika
+0C0AEh 7B                               LD        A,E
+0C0AFh 3265FD                           LD        (BIEZACY_WSKAZNIK),A
+0C0B2h 7A                               LD        A,D
+0C0B3h 3266FD                           LD        (BIEZACY_WSKAZNIK+1),A
+0C0B6h C1                               POP       BC
+0C0B7h                                            
+0C0B7h                                                           ; Inkrementacja licznika sprawnie zweryfikowanych urz¹dzeñ
+0C0B7h 3A61FD                           LD        A,(LICZBA_CZUJNIKOW)
+0C0BAh 3C                               INC       A
+0C0BBh 3261FD                           LD        (LICZBA_CZUJNIKOW),A
+0C0BEh                                            
+0C0BEh            POMIN_BLEDNY_ROM:               
+0C0BEh                                                           ; Aktualizacja rozbie¿noœci dla kolejnego przejœcia algorytmu drzewa binarnego
+0C0BEh 3A63FD                           LD        A,(OSTATNIE_ZERO)
+0C0C1h 3262FD                           LD        (OSTATNIA_ROZBIEZNOSC),A
+0C0C4h A7                               AND       A
+0C0C5h C219C0                           JP        NZ,PETLA_GLOWNA_SZUKANIA
+0C0C8h                                            
+0C0C8h 3E01                             LD        A,1
+0C0CAh 3264FD                           LD        (FLAGA_OSTATNIEGO),A
+0C0CDh C319C0                           JP        PETLA_GLOWNA_SZUKANIA
+0C0D0h                                            
+0C0D0h            SPRAWDZ_CZY_J00:                
+0C0D0h 7D                               LD        A,L
+0C0D1h A7                               AND       A
+0C0D2h 28A3                             JR        Z,SCIEZKA_JEDEN
+0C0D4h                                            
+0C0D4h C1                               POP       BC             ; Czyszczenie stosu w przypadku wykrycia b³êdu magistrali
+0C0D5h                                            
+0C0D5h            KONIEC_SZUKANIA:                
+0C0D5h CDB3C1                           CALL      NMI_ON
+0C0D8h 3A61FD                           LD        A,(LICZBA_CZUJNIKOW)
+0C0DBh 3260FD                           LD        (DEVICE_COUNT),A; Zapis ostatecznego wyniku pod 0xFD60
+0C0DEh C3CAC1                           JP        PETLA_WSZYSTKICH_CZUJNIKOW
+0C0E1h                                            
+0C0E1h                                                           ; ==============================================================================
+0C0E1h                                                           ; PODPROGRAM OBLICZANIA SUMY KONTROLNEJ CRC-8 DALLAS/MAXIM
+0C0E1h                                                           ; Wyjœcie: A = 00h (Sukces), A != 00h (B³¹d sumy kontrolnej)
+0C0E1h                                                           ; ==============================================================================
+0C0E1h            OBLICZ_CRC_ID:                  
+0C0E1h                                                           ; SPRAWDZIMY, CZY PIERWSZY ODCZYTANY BAJT = 28H
+0C0E1h 3A67FD                           LD        A,(TYMCZASOWY_ID)
+0C0E4h FE00                             CP        0              ; PIERWSZY BAJT ID, np. DS18B20
+0C0E6h 200C                             JR        NZ,OBL_CRC2
+0C0E8h            OBL_CRC1:                                      ; PIERWSZY BAJT = 0 ERROR
+0C0E8h CDB3C1                           CALL      NMI_ON
+0C0EBh 21C1C1                           LD        HL,B_DS
+0C0EEh CDD401                           CALL      PRINT
+0C0F1h 80                               DEFB      80H
+0C0F2h CF                               RST       8              ; CZEKAJ NA WCISNIECIE KLAWISZA
+0C0F3h F7                               RST       30H            ; MONITOR CA80
+0C0F4h            OBL_CRC2:                       
+0C0F4h C5                               PUSH      BC
+0C0F5h E5                               PUSH      HL
+0C0F6h 2167FD                           LD        HL,TYMCZASOWY_ID
+0C0F9h 0E08                             LD        C,8            ; Przetwarzamy 8 bajtów pobranego ID
+0C0FBh AF                               XOR       A              ; Zerowanie akumulatora CRC (A = 0)
+0C0FCh            PETLA_BAJTOW_CRC:               
+0C0FCh AE                               XOR       (HL)           ; Operacja XOR z bie¿¹cym bajtem
+0C0FDh 0608                             LD        B,8            ; Przetwarzamy 8 bitów wewn¹trz bajtu
+0C0FFh            PETLA_BITOW_CRC:                
+0C0FFh CB3F                             SRL       A              ; Przesuñ rejestr CRC w prawo, bit 0 l¹duje w Carry
+0C101h 3002                             JR        NC,BIT_CRC_ZERO; Jeœli Carry = 0, pomiñ operacjê XOR
+0C103h EE8C                             XOR       8CH            ; XOR z lustrzanym wielomianem Dallas (0x8C)
+0C105h            BIT_CRC_ZERO:                   
+0C105h 05                               DEC       B
+0C106h 20F7                             JR        NZ,PETLA_BITOW_CRC
+0C108h 23                               INC       HL             ; PrzejdŸ do nastêpnego bajtu
+0C109h 0D                               DEC       C
+0C10Ah 20F0                             JR        NZ,PETLA_BAJTOW_CRC
+0C10Ch E1                               POP       HL
+0C10Dh C1                               POP       BC
+0C10Eh C9                               RET       
+0C10Fh                                            
+0C10Fh                                            
+0C10Fh                                                           ; --- PROCEDURA RESETU ---
+0C10Fh            OW_RESET:                       
+0C10Fh 3E80                             LD        A,LOW          ; Wymuszenie stanu niskiego na PB0
+0C111h D3E3                             OUT       (CTRL),A
+0C113h 3E42                             LD        A,66           ; opoz. ok. 264 us
+0C115h            PETLA_OP_RES1:                  
+0C115h 3D                               DEC       A
+0C116h 20FD                             JR        NZ,PETLA_OP_RES1
+0C118h                                            
+0C118h 3E82                             LD        A,HIGH         ; Zwolnienie linii (Stan wysoki przez Pull-up)
+0C11Ah D3E3                             OUT       (CTRL),A
+0C11Ch 3E09                             LD        A,9            ; opoz. ok. 36 us
+0C11Eh            PETLA_OP_RES2:                  
+0C11Eh 3D                               DEC       A
+0C11Fh 20FD                             JR        NZ,PETLA_OP_RES2
+0C121h                                            
+0C121h DBE1                             IN        A,(PORT_DS)    ; Próbkowanie linii DQ
+0C123h E601                             AND       01H
+0C125h 47                               LD        B,A            ; Zachowanie stanu (0 = Presence, 1 = Brak)
+0C126h                                            
+0C126h 3E38                             LD        A,56           ; opoz. ok. 225 us
+0C128h            PETLA_OP_RES3:                  
+0C128h 3D                               DEC       A
+0C129h 20FD                             JR        NZ,PETLA_OP_RES3
+0C12Bh                                            
+0C12Bh 78                               LD        A,B
+0C12Ch C9                               RET       
+0C12Dh                                            
+0C12Dh                                                           ; --- PROCEDURA ZAPISU  BAJTU ---
+0C12Dh            OW_ZAPISZ_BAJT:                 
+0C12Dh C5                               PUSH      BC
+0C12Eh 0608                             LD        B,8
+0C130h            PETLA_ZAPISU_BAJTU:             
+0C130h 1F                               RRA                      ; Przesuñ najm³odszy bit bajtu do flagi Carry
+0C131h F5                               PUSH      AF
+0C132h 380F                             JR        C,ZAPISZ_BIT_JEDEN
+0C134h                                            
+0C134h            ZAPISZ_BIT_ZERO:                
+0C134h 3E80                             LD        A,LOW
+0C136h D3E3                             OUT       (CTRL),A
+0C138h 3E08                             LD        A,8            ; opoz. ok. 32 us               
+0C13Ah            PETLA_OP_ZAP0:                  
+0C13Ah 3D                               DEC       A
+0C13Bh 20FD                             JR        NZ,PETLA_OP_ZAP0
+0C13Dh 3E82                             LD        A,HIGH
+0C13Fh D3E3                             OUT       (CTRL),A
+0C141h 180F                             JR        KONIEC_ZAPISU_BITU
+0C143h                                            
+0C143h            ZAPISZ_BIT_JEDEN:               
+0C143h 3E80                             LD        A,LOW
+0C145h D3E3                             OUT       (CTRL),A
+0C147h 00                               NOP       
+0C148h 00                               NOP       
+0C149h 3E82                             LD        A,HIGH
+0C14Bh D3E3                             OUT       (CTRL),A
+0C14Dh 3E08                             LD        A,8            ; opoz. ok. 32 us            
+0C14Fh            PETLA_OP_ZAP1:                  
+0C14Fh 3D                               DEC       A
+0C150h 20FD                             JR        NZ,PETLA_OP_ZAP1
+0C152h                                            
+0C152h            KONIEC_ZAPISU_BITU:             
+0C152h F1                               POP       AF
+0C153h 05                               DEC       B
+0C154h 20DA                             JR        NZ,PETLA_ZAPISU_BAJTU
+0C156h C1                               POP       BC
+0C157h C9                               RET       
+0C158h                                            
+0C158h                                                           ; --- PROCEDURA ODCZYTU POJEDYNCZEGO BITU ---
+0C158h            OW_ODCZYTAJ_BIT:                
+0C158h 3E80                             LD        A,LOW          ; Wymuszenie stanu niskiego (start szczeliny)
+0C15Ah D3E3                             OUT       (CTRL),A
+0C15Ch 00                               NOP       
+0C15Dh 00                               NOP       
+0C15Eh 3E82                             LD        A,HIGH         ; Zwolnienie linii
+0C160h D3E3                             OUT       (CTRL),A
+0C162h 00                               NOP       
+0C163h 00                               NOP       
+0C164h DBE1                             IN        A,(PORT_DS)    ; Próbkowanie portu przed up³ywem 15 us
+0C166h E601                             AND       01H
+0C168h 47                               LD        B,A
+0C169h 3E07                             LD        A,7            ; opoz. ok. 28 us              
+0C16Bh            PETLA_OP_ODC:                   
+0C16Bh 3D                               DEC       A
+0C16Ch 20FD                             JR        NZ,PETLA_OP_ODC
+0C16Eh 78                               LD        A,B
+0C16Fh C9                               RET       
+0C170h                                            
+0C170h                                                           ; --- PROCEDURA ZAPISU POJEDYNCZEGO BITU ---
+0C170h            OW_ZAPISZ_BIT:                  
+0C170h E601                             AND       01H
+0C172h 200E                             JR        NZ,ZAPISZ_POJEDYNCZY_JEDEN
+0C174h                                            
+0C174h 3E80                             LD        A,LOW
+0C176h D3E3                             OUT       (CTRL),A
+0C178h 3E08                             LD        A,8            ; opoz. ok. 32 us
+0C17Ah            PETLA_BIT_Z0:                   
+0C17Ah 3D                               DEC       A
+0C17Bh 20FD                             JR        NZ,PETLA_BIT_Z0
+0C17Dh 3E82                             LD        A,HIGH
+0C17Fh D3E3                             OUT       (CTRL),A
+0C181h C9                               RET       
+0C182h                                            
+0C182h            ZAPISZ_POJEDYNCZY_JEDEN:
+0C182h                                            
+0C182h 3E80                             LD        A,LOW
+0C184h D3E3                             OUT       (CTRL),A
+0C186h 00                               NOP       
+0C187h 00                               NOP       
+0C188h 3E82                             LD        A,HIGH
+0C18Ah D3E3                             OUT       (CTRL),A
+0C18Ch 3E08                             LD        A,8            ; opoz. ok. 32 us
+0C18Eh            PETLA_BIT_Z1:                   
+0C18Eh 3D                               DEC       A
+0C18Fh 20FD                             JR        NZ,PETLA_BIT_Z1
+0C191h C9                               RET       
+0C192h                                            
+0C192h                                                           ; --- PODPROGRAMY POMOCNICZE ---
+0C192h            OW_WYSLIJ_ADRES_ROM:            
+0C192h C5                               PUSH      BC
+0C193h 0E08                             LD        C,8
+0C195h            PETLA_WYSYLANIA_ROM:            
+0C195h 7E                               LD        A,(HL)
+0C196h E5                               PUSH      HL
+0C197h CD2DC1                           CALL      OW_ZAPISZ_BAJT
+0C19Ah E1                               POP       HL
+0C19Bh 23                               INC       HL
+0C19Ch 0D                               DEC       C
+0C19Dh 20F6                             JR        NZ,PETLA_WYSYLANIA_ROM
+0C19Fh C1                               POP       BC
+0C1A0h C9                               RET       
+0C1A1h                                            
+0C1A1h            OW_ODCZYTAJ_BAJT:               
+0C1A1h C5                               PUSH      BC
+0C1A2h 0E08                             LD        C,8
+0C1A4h AF                               XOR       A
+0C1A5h            PETLA_ODCZYTU_BAJTU:            
+0C1A5h F5                               PUSH      AF
+0C1A6h CD58C1                           CALL      OW_ODCZYTAJ_BIT
+0C1A9h 47                               LD        B,A
+0C1AAh F1                               POP       AF
+0C1ABh CB18                             RR        B
+0C1ADh 1F                               RRA       
+0C1AEh 0D                               DEC       C
+0C1AFh 20F4                             JR        NZ,PETLA_ODCZYTU_BAJTU
+0C1B1h C1                               POP       BC
+0C1B2h C9                               RET       
+0C1B3h                                            
+0C1B3h            NMI_ON:                                        ; ENABLE NMI wlacz przerwania NMI /obsluga NMI trwa min. ok. 130 uS
+0C1B3h 3E07                             LD        A,7            ; ; stan H  ; opoznienia NIE MOGA wykorzystywac HALT i innych procedur zwiazanych z NMI!!!
+0C1B5h D3F9                             OUT       (0F9H),A       ; ustaw bit PC4 port 8255 /systemowego/ na "1"
+0C1B7h 3EFA                             LD        A,0FAH
+0C1B9h D3F9                             OUT       (0F9H),A
+0C1BBh C9                               RET       
+0C1BCh                                            
+0C1BCh            NMI_OFF:                                       ; wylacz przerwania NMI - DISABLE NMI
+0C1BCh 3E03                             LD        A,3            ; stan L, ustaw bit PC4 na "0"
+0C1BEh D3F9                             OUT       (0F9H),A
+0C1C0h C9                               RET       
+0C1C1h                                                           ; brak czujnika 
+0C1C1h 545C085EED B_DS:                 DEFB      54H,5CH,8,5EH,0EDH,79H,50H,50H,255; "no dS" ma CA80 
+0C1CAh                                                           ; ==============================================================================
+0C1CAh                                                           ; BLOK 2 I BLOK 3: SEKWENCYJNY ODCZYT I WYŒWIETLANIE (Wersja bez Skip ROM)
+0C1CAh                                                           ; ZNAK_TEMP '-' na CYF4, numer czujnika na CYF7 lub CYF6 i CYF7 gdy ilosc >= 10 patrz opis <WYSWIETL_NUMER_CZUJNIKA>
+0C1CAh                                                           ; ==============================================================================
+0C1CAh                                            
+0C1CAh                                                           ; ---  ZMIENNe W RAM CA80 ---
+0C1CAh            LSB_TEMP:             EQU       0FEB0H         ; Bezpieczne miejsce na LSB z odczytu
+0C1CAh            MSB_TEMP:             EQU       LSB_TEMP+1     ;0FDB1H ; Bezpieczne miejsce na MSB z odczytu
+0C1CAh            NR_CZUJNIKA:          EQU       MSB_TEMP+1     ;0FDB2H ; Numer porz¹dkowy czujnika (1, 2, 3...)
+0C1CAh            WSKAZNIK_ROM_PETLA:   EQU       NR_CZUJNIKA+1  ;0FDB3H ; 2 bajty - adres aktualnego ID w bazie RAM
+0C1CAh            ZNAK_TEMP:            EQU       WSKAZNIK_ROM_PETLA+2;0FDB5H ; 0 = dodatnia, 1 = ujemna
+0C1CAh            CYF0:                 EQU       0FFF7H
+0C1CAh            CYF1:                 EQU       0FFF8H         ;cyfra do wyswietlania na CA80
+0C1CAh            CYF2:                 EQU       0FFF9H
+0C1CAh            CYF3:                 EQU       0FFFAH
+0C1CAh            CYF4:                 EQU       0FFFBH
+0C1CAh            CYF5:                 EQU       0FFFCH
+0C1CAh            CYF6:                 EQU       0FFFDH
+0C1CAh            CYF7:                 EQU       0FFFEH
+0C1CAh                                            
+0C1CAh            PETLA_WSZYSTKICH_CZUJNIKOW:
+0C1CAh                                            
+0C1CAh DF                               RST       18H
+0C1CBh 26                               DEFB      26H            ; WYSWIETL ILOSC ZNALEZIONYCH CZYJNKOW
+0C1CCh CDB4C4                           CALL      OPOZN_2_SEK
+0C1CFh                                            
+0C1CFh            PWC:                                           ; Sprawdzenie czy w ogóle wykryto jakiekolwiek urz¹dzenia
+0C1CFh 3A60FD                           LD        A,(DEVICE_COUNT); Odczytaj stan DEVICE_COUNT z Bloku 1
+0C1D2h A7                               AND       A
+0C1D3h C8                               RET       Z              ; Jeœli 0, wyjdŸ (brak urz¹dzeñ)
+0C1D4h                                            
+0C1D4h                                                           ; Inicjalizacja wskaŸników dla nowego pe³nego cyklu pomiaru
+0C1D4h                                            
+0C1D4h 2170FD                           LD        HL,NR_ID       ; Zaczynamy od pierwszego ID w bazie danych RAM
+0C1D7h 22B3FE                           LD        (WSKAZNIK_ROM_PETLA),HL
+0C1DAh 3E01                             LD        A,1
+0C1DCh 32B2FE                           LD        (NR_CZUJNIKA),A; Pierwszy czujnik ma numer 1
+0C1DFh                                            
+0C1DFh            PETLA_SEKWENCYJNA:              
+0C1DFh                                                           ; --- KROK A: Uruchomienie konwersji (Convert T) dla konkretnego czujnika ---
+0C1DFh CDBCC1                           CALL      NMI_OFF        ; Blokada NMI na czas transmisji 1-Wire
+0C1E2h CD0FC1                           CALL      OW_RESET
+0C1E5h C2E8C0                           JP        NZ,OBL_CRC1
+0C1E8h                                            
+0C1E8h 3E55                             LD        A,55H          ; MATCH ROM -  BEDZIEMY ADRESOWALI JEDEN CZUJNIK
+0C1EAh CD2DC1                           CALL      OW_ZAPISZ_BAJT
+0C1EDh                                            
+0C1EDh                                                           ; Pobierz adres unikalnego ID aktualnego czujnika
+0C1EDh 3AB3FE                           LD        A,(WSKAZNIK_ROM_PETLA)
+0C1F0h 6F                               LD        L,A
+0C1F1h 3AB4FE                           LD        A,(WSKAZNIK_ROM_PETLA+1)
+0C1F4h 67                               LD        H,A            ; HL = Adres ID w RAM
+0C1F5h CD92C1                           CALL      OW_WYSLIJ_ADRES_ROM
+0C1F8h                                            
+0C1F8h 3E44                             LD        A,44H          ; CONVERT T (Zlecenie pomiaru tylko temu jednemu uk³adowi)
+0C1FAh CD2DC1                           CALL      OW_ZAPISZ_BAJT
+0C1FDh CDB3C1                           CALL      NMI_ON         ; W³¹czenie NMI na czas konwersji temperatury
+0C200h                                            
+0C200h                                                           ; Odczekanie 750 ms na zakoñczenie pomiaru przez ten konkretny uk³ad
+0C200h 064B                             LD        B,75           ; 750 ms dotyczy odzielczosci 12-bit, jesli mniejsza, mozna zmniejszyc
+0C202h            PETLA_KONV_G:                   
+0C202h 113505                           LD        DE,1333
+0C205h            PETLA_KONV_W:                   
+0C205h 1B                               DEC       DE
+0C206h 7A                               LD        A,D
+0C207h B3                               OR        E
+0C208h 20FB                             JR        NZ,PETLA_KONV_W
+0C20Ah 05                               DEC       B
+0C20Bh 20F5                             JR        NZ,PETLA_KONV_G
+0C20Dh                                            
+0C20Dh                                                           ; --- KROK B: Odczyt Scratchpadu tego samego czujnika ---
+0C20Dh CDBCC1                           CALL      NMI_OFF        ; Blokada NMI przed odczytem
+0C210h CD0FC1                           CALL      OW_RESET
+0C213h C2E8C0                           JP        NZ,OBL_CRC1
+0C216h                                            
+0C216h 3E55                             LD        A,55H          ; MATCH ROM
+0C218h CD2DC1                           CALL      OW_ZAPISZ_BAJT
+0C21Bh                                            
+0C21Bh                                                           ; Ponowne przes³anie tego samego adresu ID
+0C21Bh 3AB3FE                           LD        A,(WSKAZNIK_ROM_PETLA)
+0C21Eh 6F                               LD        L,A
+0C21Fh 3AB4FE                           LD        A,(WSKAZNIK_ROM_PETLA+1)
+0C222h 67                               LD        H,A
+0C223h CD92C1                           CALL      OW_WYSLIJ_ADRES_ROM
+0C226h                                            
+0C226h 3EBE                             LD        A,0BEH         ; READ SCRATCHPAD
+0C228h CD2DC1                           CALL      OW_ZAPISZ_BAJT
+0C22Bh                                            
+0C22Bh                                                           ; Bezpoœredni odczyt danych pod bezpieczne adresy potokowe
+0C22Bh CDA1C1                           CALL      OW_ODCZYTAJ_BAJT
+0C22Eh 32B0FE                           LD        (LSB_TEMP),A   ; Wpisz LSB pod 0xFDB0
+0C231h CDA1C1                           CALL      OW_ODCZYTAJ_BAJT
+0C234h 32B1FE                           LD        (MSB_TEMP),A   ; Wpisz MSB pod 0xFDB1
+0C237h CDB3C1                           CALL      NMI_ON         ; Przywrócenie NMI dla odœwie¿ania LED
+0C23Ah                                            
+0C23Ah CD1EC3                           CALL      REJESTRUJ_MIN_MAX; zapisz max i min teperatury i czujnik
+0C23Dh                                            
+0C23Dh                                                           ; --- KROK C: Przeliczenie i wyœwietlenie (Wywo³anie Bloku 3) ---
+0C23Dh CD79C2                           CALL      KONWERSJA_TEMP ; Wylicza temperaturê i wyswietla na CA80
+0C240h                                            
+0C240h                                                           ; --- KROK D: ZW£OKA OK. 10 SEKUND Z MONITOROWANIEM KLAWIATURY ---
+0C240h                                                           ; Wykonujemy 1000 powtórzeñ po 10 ms, wywo³uj¹c wewn¹trz procedurê klawiatury.
+0C240h 01E803                           LD        BC,1000
+0C243h            PETLA_10S_DLA_KLAWIATURY:
+0C243h                                            
+0C243h C5                               PUSH      BC             ; Schowaj licznik BC na stosie
+0C244h                                            
+0C244h                                                           ; Precyzyjna pêtla opóŸniaj¹ca 10 ms dla  4 MHz
+0C244h 113505                           LD        DE,1333
+0C247h            PETLA_10MS:                     
+0C247h 1B                               DEC       DE
+0C248h 7A                               LD        A,D
+0C249h B3                               OR        E
+0C24Ah C247C2                           JP        NZ,PETLA_10MS
+0C24Dh                                            
+0C24Dh                                                           ; Wywo³anie procedury badania klawiszy D (MIN temp)  i F (MAX temp)
+0C24Dh CDF6C3                           CALL      SPRAWDZ_KLAWIATURE
+0C250h                                            
+0C250h C1                               POP       BC             ; Przywróæ licznik BC ze stosu
+0C251h 0B                               DEC       BC
+0C252h 78                               LD        A,B
+0C253h B1                               OR        C
+0C254h C243C2                           JP        NZ,PETLA_10S_DLA_KLAWIATURY; Powtarzaj, a¿ minie pe³ne 10 sekund
+0C257h                                            
+0C257h                                                           ; --- KROK E: Sprawdzenie warunku koñca pêtli czujników ---
+0C257h 3A60FD                           LD        A,(DEVICE_COUNT); Odczytaj stan DEVICE_COUNT
+0C25Ah 47                               LD        B,A            ; B = Ca³kowita liczba znalezionych urz¹dzeñ
+0C25Bh 3AB2FE                           LD        A,(NR_CZUJNIKA); aktualnie mierzony wyswietlany
+0C25Eh B8                               CP        B              ; Czy wyœwietlono ju¿ pomiar z ostatniego czujnika?
+0C25Fh CACFC1                           JP        Z,PWC          ; Jeœli tak, zamknij cykl i zacznij od nowa
+0C262h                                            
+0C262h                                                           ; Przejœcie do kolejnego urz¹dzenia na liœcie
+0C262h 3C                               INC       A
+0C263h 32B2FE                           LD        (NR_CZUJNIKA),A; Zwiêksz numer czujnika na pozycji CYF7
+0C266h                                            
+0C266h                                                           ; Przesuniêcie wskaŸnika bazy danych o 8 bajtów (skok do kolejnego ID w RAM)
+0C266h 3AB3FE                           LD        A,(WSKAZNIK_ROM_PETLA)
+0C269h C608                             ADD       A,8
+0C26Bh 32B3FE                           LD        (WSKAZNIK_ROM_PETLA),A
+0C26Eh 3AB4FE                           LD        A,(WSKAZNIK_ROM_PETLA+1)
+0C271h CE00                             ADC       A,0
+0C273h 32B4FE                           LD        (WSKAZNIK_ROM_PETLA+1),A
+0C276h                                            
+0C276h C3DFC1                           JP        PETLA_SEKWENCYJNA; Skok do obs³ugi kolejnego czujnika
+0C279h                                            
+0C279h                                                           ; BLOK 3:  KONWERSJA TEMPERATURY, dokladnosc 1/10 st. C 
+0C279h                                                           ;         i WYSWIETLENIE TEMPERATURY
+0C279h            KONWERSJA_TEMP:                 
+0C279h D7                               RST       10H            ; D7 CZYSC WYSW.
+0C27Ah 25                               DEFB      25H
+0C27Bh AF                               XOR       A
+0C27Ch 32B5FE                           LD        (ZNAK_TEMP),A
+0C27Fh 3E63                             LD        A,63H          ;  znak stopnia, maly kwadrat
+0C281h 32F7FF                           LD        (CYF0),A
+0C284h                                                           ; zaladuj odczytana temperature z czujnika
+0C284h 2AB0FE                           LD        HL,(LSB_TEMP)
+0C287h                                                           ; SprawdŸ ZNAK_TEMP liczby (najstarszy bit MSB)
+0C287h CB7C                             BIT       7,H
+0C289h 280C                             JR        Z,DODATNIA     ; Jeœli bit 7 == 0, temperatura jest dodatnia
+0C28Bh                                            
+0C28Bh                                                           ;  Obs³uga temperatury ujemnej (zamiana na wartosc bezwzglêdna -  U2)
+0C28Bh 3E01                             LD        A,1
+0C28Dh 32B5FE                           LD        (ZNAK_TEMP),A
+0C290h 7C                               LD        A,H
+0C291h 2F                               CPL       
+0C292h 67                               LD        H,A
+0C293h 7D                               LD        A,L
+0C294h 2F                               CPL       
+0C295h 6F                               LD        L,A
+0C296h 23                               INC       HL
+0C297h                                            
+0C297h            DODATNIA:                       
+0C297h 7D                               LD        A,L            ; jednosci i dziesietne
+0C298h 5D                               LD        E,L
+0C299h E6F0                             AND       0F0H
+0C29Bh 6F                               LD        L,A
+0C29Ch 7B                               LD        A,E            ;  interseuja nas tylko DZIESIETNE 
+0C29Dh E60F                             AND       0FH
+0C29Fh F5                               PUSH      AF             ; zapamietanie dziesietnych       
+0C2A0h CB14                             RL        H
+0C2A2h CB14                             RL        H
+0C2A4h CB14                             RL        H
+0C2A6h CB14                             RL        H
+0C2A8h                                            
+0C2A8h CB1D                             RR        L
+0C2AAh CB1D                             RR        L
+0C2ACh CB1D                             RR        L
+0C2AEh CB1D                             RR        L
+0C2B0h 7D                               LD        A,L
+0C2B1h B4                               OR        H              ; HL = SETKI, DZIESIATKI I JEDNOSCI JAKO HEX
+0C2B2h                                            
+0C2B2h            HEX_TO_BCD:                     
+0C2B2h                                                           ; A = liczba Hex (np. 0x72) do zamiany na BCD
+0C2B2h 2600                             LD        H,0            ; Wyzeruj H (tutaj zbierzemy setki)
+0C2B4h                                            
+0C2B4h                                                           ; --- 1. Wyznaczenie "setek" poprzez odejmowanie 100 (0x64 w Hex) ---
+0C2B4h            PETLA_SETEK:                    
+0C2B4h FE64                             CP        100            ; Czy A >= 100 (0x64)?
+0C2B6h 3805                             JR        C,KONIEC_SETEK
+0C2B8h D664                             SUB       100            ; Odejmij 100 dziesiêtnie (szesnastkowo 0x64)
+0C2BAh 24                               INC       H              ; Zwiêksz licznik setek
+0C2BBh 18F7                             JR        PETLA_SETEK
+0C2BDh            KONIEC_SETEK:                   
+0C2BDh                                            
+0C2BDh                                                           ; Przesuñ setki na starszy pó³bajt rejestru H
+0C2BDh F5                               PUSH      AF             ; Zachowaj resztê (< 100)
+0C2BEh 7C                               LD        A,H
+0C2BFh CB27                             SLA       A
+0C2C1h CB27                             SLA       A
+0C2C3h CB27                             SLA       A
+0C2C5h CB27                             SLA       A
+0C2C7h 67                               LD        H,A            ; H ma setki na starszych bitach
+0C2C8h F1                               POP       AF             ; Przywróæ resztê do A
+0C2C9h                                            
+0C2C9h                                                           ; --- 2. Wyznaczenie Dziesi¹tek poprzez odejmowanie 10 (0x0A w Hex) ---
+0C2C9h 0600                             LD        B,0            ; B = licznik dziesi¹tek
+0C2CBh            PETLA_DZIESIATEK:               
+0C2CBh FE0A                             CP        10             ; Czy A >= 10 (0x0A)?
+0C2CDh 3805                             JR        C,KONIEC_DZIESIATEK
+0C2CFh D60A                             SUB       10             ; Odejmij 10 dziesiêtnie (0x0A)
+0C2D1h 04                               INC       B              ; Zwiêksz licznik dziesi¹tek
+0C2D2h 18F7                             JR        PETLA_DZIESIATEK
+0C2D4h            KONIEC_DZIESIATEK:              
+0C2D4h                                            
+0C2D4h                                                           ; W A zosta³a reszta, czyli czyste Jednoœci (0-9)
+0C2D4h                                                           ; Po³¹cz setki (w H) z dziesi¹tkami (w B)
+0C2D4h 4F                               LD        C,A            ; C = zachowaj jednoœci na chwilê
+0C2D5h 7C                               LD        A,H
+0C2D6h B0                               OR        B              ; Po³¹cz setki i dziesi¹tki w jednym bajcie
+0C2D7h 67                               LD        H,A            ; H = [Setki | Dziesi¹tki] -gotowe!
+0C2D8h                                            
+0C2D8h                                                           ; --- 3. Umieszczenie Jednoœci na starszym pó³bajcie rejestru L ---
+0C2D8h 79                               LD        A,C            ; Pobierz jednoœci (0-9)
+0C2D9h CB27                             SLA       A
+0C2DBh CB27                             SLA       A
+0C2DDh CB27                             SLA       A
+0C2DFh CB27                             SLA       A              ; Przesuñ na starszy pó³bajt
+0C2E1h                                            
+0C2E1h 6F                               LD        L,A            ; L = [Jednoœci 0 - 9]
+0C2E2h                                            
+0C2E2h                                                           ; = = = U L A M E K  1/10 st. C
+0C2E2h                                                           ; Konwersja u³amka 1/16 (m³odszy pó³bajt L) na cyfrê dziesiêtn¹ 0-9
+0C2E2h                                                           ; Wejœcie: A = bajt zawieraj¹cy u³amek na m³odszym pó³bajcie (np. 0x0A)
+0C2E2h                                                           ; Wyjœcie: L = starszy polbajt - jednosci, mlodszy - dzisietne 1/10 cyfra dziesiêtna (0-9)
+0C2E2h                                            
+0C2E2h            PRZELICZ_ULAMEK:                
+0C2E2h F1                               POP       AF             ; odtworz dziesietne
+0C2E3h                                            
+0C2E3h                                                           ; Krok 1: Mno¿enie przez 10 ( A = A * 10 ) 
+0C2E3h 47                               LD        B,A            ; B = X
+0C2E4h CB27                             SLA       A              ; A = 2 * X
+0C2E6h CB27                             SLA       A              ; A = 4 * X
+0C2E8h CB27                             SLA       A              ; A = 8 * X
+0C2EAh 80                               ADD       A,B            ; A = 9 * X
+0C2EBh 80                               ADD       A,B            ; A = 10 * X
+0C2ECh                                            
+0C2ECh                                                           ; Krok 2: Dzielenie przez 16 (przesuniêcie w prawo o 4 bity)
+0C2ECh CB3F                             SRL       A
+0C2EEh CB3F                             SRL       A
+0C2F0h CB3F                             SRL       A
+0C2F2h CB3F                             SRL       A              ; W A zostaje gotowa cyfra dziesiêtna (0-9)
+0C2F4h                                            
+0C2F4h B5                               OR        L              ; Po³¹cz u³amek (m³odszy pó³bajt) ze starym L (starszy pó³bajt)
+0C2F5h 6F                               LD        L,A            ; Teraz L ma gotowy format: [Jednoœci | Czesc dziesietna]
+0C2F6h                                                           ;  HL = SETKI, DZISIATKI, JEDNOSCI DZIESIETNE,NP,102,3 [Sst. C]
+0C2F6h                                            
+0C2F6h                                                           ; 4. WYSWIETL TEMPERATURE 
+0C2F6h E7                               RST       20H            ; E7 WYSW. ZAWARTOSC HL
+0C2F7h 41                               DEFB      41H
+0C2F8h CB64                             BIT       4,H
+0C2FAh 200B                             JR        NZ,ZAP2
+0C2FCh 7C                               LD        A,H
+0C2FDh FE00                             CP        0
+0C2FFh 2804                             JR        Z,ZAP1
+0C301h                                            
+0C301h D7                               RST       10H            ; D7 CZYSC
+0C302h 14                               DEFB      14H            ; CYF4
+0C303h 1802                             JR        ZAP2
+0C305h D7         ZAP1:                 RST       10H
+0C306h 23                               DEFB      23H
+0C307h 21F9FF     ZAP2:                 LD        HL,CYF2
+0C30Ah CBFE                             SET       7,(HL)
+0C30Ch                                            
+0C30Ch 3AB5FE                           LD        A,(ZNAK_TEMP)
+0C30Fh FE00                             CP        0
+0C311h 2805                             JR        Z,WYSWIETL_NUMER_CZUJNIKA
+0C313h 3E40                             LD        A,40H          ; " - :
+0C315h 32FBFF                           LD        (CYF4),A
+0C318h                                            
+0C318h            WYSWIETL_NUMER_CZUJNIKA:
+0C318h                                                           ; jesli czujnikow >= 10, zmien  defb na 26h
+0C318h                                                           ; CYF7 -> Wyœwietlenie numeru bie¿¹cego czujnika
+0C318h 3AB2FE                           LD        A,(NR_CZUJNIKA)
+0C31Bh DF                               RST       18H
+0C31Ch 17                               DEFB      17H            ; jesli czujnikow >= 10 to DEFB 26h !!
+0C31Dh C9                               RET                      ; Powrót z programu KONWERSJA_TEMP 
+0C31Eh                                            
+0C31Eh                                                           ; =====================================
+0C31Eh                                            
+0C31Eh            SYS_MIN:              EQU       0FFEEH         ; SYSTEMOWY CZAS / DATA CA80
+0C31Eh            SYS_GODZ:             EQU       0FFEFH
+0C31Eh            SYS_DZIEN:            EQU       0FFF1H
+0C31Eh            SYS_MIES:             EQU       0FFF2H
+0C31Eh                                            
+0C31Eh            MIN_TEMP_BRAM:        EQU       0FD50H         ; 2 bajty - najni¿sza temp. (LSB/MSB)
+0C31Eh            MAX_TEMP_BRAM:        EQU       0FD52H         ; 2 bajty - najwy¿sza temp. (LSB/MSB)
+0C31Eh                                            
+0C31Eh            REJESTR_MIN_RAM:      EQU       0FEF0H         ; Start stempla MIN (zajmuje 7 bajtów: FEF0-FEF6)
+0C31Eh            REJESTR_MAX_RAM:      EQU       0FEF7H         ; Start stempla MAX (zajmuje 7 bajtów: FEF7-FEFD)
+0C31Eh                                            
+0C31Eh                                                           ; ==============================================================================
+0C31Eh                                                           ; PODPROGRAM: REJESTRUJ_MIN_MAX (Wersja : Czas + Nr + Temperatura)
+0C31Eh                                                           ; ==============================================================================
+0C31Eh            REJESTRUJ_MIN_MAX:              
+0C31Eh F5                               PUSH      AF
+0C31Fh C5                               PUSH      BC
+0C320h D5                               PUSH      DE
+0C321h E5                               PUSH      HL
+0C322h D9                               EXX       
+0C323h                                                           ; --- SPRAWDZENIE FLAGI INICJALIZACJI GLOBALNEJ (0xFEFE) ---
+0C323h 3AFEFE                           LD        A,(REJESTR_MAX_RAM+7)
+0C326h FE55                             CP        55H            ; Czy system zosta³ ju¿ zainicjalizowany baz¹ startow¹?
+0C328h CA4BC3                           JP        Z,POROWNAJ_Z_MINIMUM; Jeœli tak (wartoœæ 55h), przejdŸ bezpoœrednio do porównañ
+0C32Bh                                            
+0C32Bh                                                           ; --- INICJALIZACJA STARTOWA (WYKONA SIÊ TYLKO RAZ PO W£¥CZENIU CA80) ---
+0C32Bh                                                           ; Wymuszamy wpisanie bie¿¹cej temperatury z RAM jako pierwszego rekordu MIN i MAX
+0C32Bh 3AB0FE                           LD        A,(LSB_TEMP)   ; Pobierz LSB z 0xFDB0
+0C32Eh 32F5FE                           LD        (REJESTR_MIN_RAM+5),A; Zapisz jako LSB dla MIN
+0C331h 32FCFE                           LD        (REJESTR_MAX_RAM+5),A; Zapisz jako LSB dla MAX
+0C334h                                            
+0C334h 3AB1FE                           LD        A,(MSB_TEMP)   ; Pobierz MSB z 0xFDB1
+0C337h 32F6FE                           LD        (REJESTR_MIN_RAM+6),A; Zapisz jako MSB dla MIN
+0C33Ah 32FDFE                           LD        (REJESTR_MAX_RAM+6),A; Zapisz jako MSB dla MAX
+0C33Dh                                            
+0C33Dh                                                           ; Zapisz datê, czas i numer czujnika dla obu stempli startowych
+0C33Dh CDD0C4                           CALL      ZAPISZ_STEMPEL_MIN_DIRECT
+0C340h CDEFC4                           CALL      ZAPISZ_STEMPEL_MAX_DIRECT
+0C343h                                            
+0C343h                                                           ; Ustaw flagê inicjalizacji na 55h, aby trwale zablokowaæ tê sekcjê
+0C343h 3E55                             LD        A,55H
+0C345h 32FEFE                           LD        (REJESTR_MAX_RAM+7),A
+0C348h C395C3                           JP        KONIEC_REJESTRACJI
+0C34Bh                                            
+0C34Bh                                                           ; ==============================================================================
+0C34Bh                                                           ; 1. BLOK SPRAWDZANIA GLOBALNEGO MINIMUM
+0C34Bh                                                           ; ==============================================================================
+0C34Bh            POROWNAJ_Z_MINIMUM:             
+0C34Bh                                                           ; Wczytanie dotychczasowego rekordowego MINIMUM do HL prosto z 0xFEF5/6
+0C34Bh 3AF5FE                           LD        A,(REJESTR_MIN_RAM+5)
+0C34Eh 6F                               LD        L,A
+0C34Fh 3AFDFE                           LD        A,(REJESTR_MAX_RAM+6)
+0C352h 67                               LD        H,A            ; HL = Dotychczasowe Minimum
+0C353h                                            
+0C353h                                                           ; £adujemy temperaturê bie¿¹cego czujnika do DE
+0C353h 3AB0FE                           LD        A,(LSB_TEMP)
+0C356h 5F                               LD        E,A
+0C357h 3AB1FE                           LD        A,(MSB_TEMP)
+0C35Ah 57                               LD        D,A            ; DE = Bie¿¹ca temperatura
+0C35Bh                                            
+0C35Bh                                                           ; Test MINIMUM: (Bie¿¹ca - Stare_MIN) -> (DE - HL)
+0C35Bh D5                               PUSH      DE
+0C35Ch B7                               OR        A              ; Czyszczenie Carry
+0C35Dh EB                               EX        DE,HL          ; HL = Bie¿¹ca, DE = Stare_MIN
+0C35Eh ED52                             SBC       HL,DE          ; HL = Bie¿¹ca - Stare_MIN
+0C360h D1                               POP       DE
+0C361h                                            
+0C361h                                                           ; Jeœli wynik dodatni lub zero (P), bie¿¹ca temperatura nie jest ni¿sza.
+0C361h                                                           ; Pomijamy zapis minimum i przechodzimy do testu maksimum.
+0C361h F272C3                           JP        P,TEST_MAKSIMUM
+0C364h                                            
+0C364h                                                           ; --- ZAPIS NOWEGO REKORDU MINIMUM (WYKONA SIÊ GDY DE < MIN) ---
+0C364h 7B                               LD        A,E
+0C365h 32F5FE                           LD        (REJESTR_MIN_RAM+5),A; Zapisz nowe LSB bezpoœrednio pod 0xFEF5
+0C368h 7A                               LD        A,D
+0C369h 32F6FE                           LD        (REJESTR_MIN_RAM+6),A; Zapisz nowe MSB bezpoœrednio pod 0xFEF6
+0C36Ch                                            
+0C36Ch                                                           ; Zaktualizuj stempel czasu i numer czujnika dla Minimum
+0C36Ch CDD0C4                           CALL      ZAPISZ_STEMPEL_MIN_DIRECT
+0C36Fh C395C3                           JP        KONIEC_REJESTRACJI; Jeœli pobi³ rekord zimna, nie sprawdzamy ciep³a w tym kroku
+0C372h                                            
+0C372h                                                           ; ==============================================================================
+0C372h                                                           ; 2. BLOK SPRAWDZANIA GLOBALNEGO MAKSIMUM
+0C372h                                                           ; ==============================================================================
+0C372h            TEST_MAKSIMUM:                  
+0C372h                                                           ; Wczytanie dotychczasowego rekordowego MAKSIMUM do HL prosto z 0xFEFC/D
+0C372h 3AFCFE                           LD        A,(REJESTR_MAX_RAM+5)
+0C375h 6F                               LD        L,A
+0C376h 3AFDFE                           LD        A,(REJESTR_MAX_RAM+6)
+0C379h 67                               LD        H,A            ; HL = Dotychczasowe Maksimum
+0C37Ah                                            
+0C37Ah                                                           ; Œwie¿e za³adowanie temperatury bie¿¹cego czujnika do DE
+0C37Ah 3AB0FE                           LD        A,(LSB_TEMP)
+0C37Dh 5F                               LD        E,A
+0C37Eh 3AB1FE                           LD        A,(MSB_TEMP)
+0C381h 57                               LD        D,A            ; DE = Bie¿¹ca temperatura
+0C382h                                            
+0C382h                                                           ; Test MAKSIMUM: (Stare_MAX - Bie¿¹ca) -> (HL - DE)
+0C382h D5                               PUSH      DE
+0C383h B7                               OR        A              ; Czyszczenie Carry
+0C384h ED52                             SBC       HL,DE          ; HL = Stare_MAX - Bie¿¹ca
+0C386h D1                               POP       DE
+0C387h                                            
+0C387h                                                           ; Jeœli wynik dodatni lub zero (P), bie¿¹ca temperatura nie jest wy¿sza -> koniec.
+0C387h F295C3                           JP        P,KONIEC_REJESTRACJI
+0C38Ah                                            
+0C38Ah                                                           ; --- ZAPIS NOWEGO REKORDU MAKSIMUM (WYKONA SIÊ GDY DE > MAX) ---
+0C38Ah 7B                               LD        A,E
+0C38Bh 32FCFE                           LD        (REJESTR_MAX_RAM+5),A; Zapisz nowe LSB bezpoœrednio pod 0xFEFC
+0C38Eh 7A                               LD        A,D
+0C38Fh 32FDFE                           LD        (REJESTR_MAX_RAM+6),A; Zapisz nowe MSB bezpoœrednio pod 0xFEFD
+0C392h                                            
+0C392h                                                           ; Zaktualizuj stempel czasu i numer czujnika dla Maksimum
+0C392h CDEFC4                           CALL      ZAPISZ_STEMPEL_MAX_DIRECT
+0C395h                                            
+0C395h            KONIEC_REJESTRACJI:             
+0C395h E1                               POP       HL
+0C396h D1                               POP       DE
+0C397h C1                               POP       BC
+0C398h F1                               POP       AF
+0C399h C9                               RET       
+0C39Ah                                            
+0C39Ah                                                           ; --- PODPROGRAM POMOCNICZY: ZAPIS STEMPLA (BEZ ZMIAN) ---
+0C39Ah            ZAPISZ_STEMPEL_CZASU:           
+0C39Ah                                                           ; Sprawdzamy na bazie m³odszego bajtu rejestru L, czy obs³ugujemy MIN czy MAX
+0C39Ah 7D                               LD        A,L
+0C39Bh FEF0                             CP        0F0H           ; Jeœli L = F0h, stemplujemy rejestr MIN
+0C39Dh C2CBC3                           JP        NZ,STEMPLUJ_MAX
+0C3A0h                                            
+0C3A0h                                                           ; --- BEZWZGLÊDNY ZAPIS REJESTRU MINIMUM (0xFEF0 - 0xFEF6) ---
+0C3A0h 3AF1FF                           LD        A,(SYS_DZIEN)
+0C3A3h 32F0FE                           LD        (REJESTR_MIN_RAM),A; 1. Dzieñ
+0C3A6h 3AF2FF                           LD        A,(SYS_MIES)
+0C3A9h 32F1FE                           LD        (REJESTR_MIN_RAM+1),A; 2. Miesi¹c
+0C3ACh 3AEFFF                           LD        A,(SYS_GODZ)
+0C3AFh 32F2FE                           LD        (REJESTR_MIN_RAM+2),A; 3. Godzina
+0C3B2h 3AEEFF                           LD        A,(SYS_MIN)
+0C3B5h 32F3FE                           LD        (REJESTR_MIN_RAM+3),A; 4. Minuta
+0C3B8h                                            
+0C3B8h 3AB2FE                           LD        A,(NR_CZUJNIKA)
+0C3BBh 32F4FE                           LD        (REJESTR_MIN_RAM+4),A; 5. Numer czujnika (Pewny odczyt z RAM 0xFDB2)
+0C3BEh                                            
+0C3BEh 3AB0FE                           LD        A,(LSB_TEMP)
+0C3C1h 32F5FE                           LD        (REJESTR_MIN_RAM+5),A; 6. LSB temperatury MIN (Pewny odczyt z RAM 0xFDB0)
+0C3C4h                                            
+0C3C4h 3AB1FE                           LD        A,(MSB_TEMP)
+0C3C7h 32F6FE                           LD        (REJESTR_MIN_RAM+6),A; 7. MSB temperatury MIN (Pewny odczyt z RAM 0xFDB1)
+0C3CAh C9                               RET       
+0C3CBh                                            
+0C3CBh                                                           ; --- BEZWZGLÊDNY ZAPIS REJESTRU MAKSIMUM (0xFEF7 - 0xFEFD) ---
+0C3CBh            STEMPLUJ_MAX:                   
+0C3CBh 3AF1FF                           LD        A,(SYS_DZIEN)
+0C3CEh 32F7FE                           LD        (REJESTR_MAX_RAM),A; 1. Dzieñ
+0C3D1h 3AF2FF                           LD        A,(SYS_MIES)
+0C3D4h 32F8FE                           LD        (REJESTR_MAX_RAM+1),A; 2. Miesi¹c
+0C3D7h 3AEFFF                           LD        A,(SYS_GODZ)
+0C3DAh 32F9FE                           LD        (REJESTR_MAX_RAM+2),A; 3. Godzina
+0C3DDh 3AEEFF                           LD        A,(SYS_MIN)
+0C3E0h 32FAFE                           LD        (REJESTR_MAX_RAM+3),A; 4. Minuta
+0C3E3h                                            
+0C3E3h 3AB2FE                           LD        A,(NR_CZUJNIKA)
+0C3E6h 32FBFE                           LD        (REJESTR_MAX_RAM+4),A; 5. Numer czujnika (Pewny odczyt z RAM 0xFDB2)
+0C3E9h                                            
+0C3E9h 3AB0FE                           LD        A,(LSB_TEMP)
+0C3ECh 32FCFE                           LD        (REJESTR_MAX_RAM+5),A; 6. LSB temperatury MAX (Pewny odczyt z RAM 0xFDB0)
+0C3EFh                                            
+0C3EFh 3AB1FE                           LD        A,(MSB_TEMP)
+0C3F2h 32FDFE                           LD        (REJESTR_MAX_RAM+6),A; 7. MSB temperatury MAX (Pewny odczyt z RAM 0xFDB1)
+0C3F5h C9                               RET       
+0C3F6h                                            
+0C3F6h                                                           ; ==============================================================================
+0C3F6h                                                           ; KOMPLETNA PROCEDURA: SPRAWDZ_KLAWIATURE (WERSJA Z PODWÓJNYM EKRANEM)
+0C3F6h                                                           ; Najpierw pokazuje temperaturê przez 4s, potem czas przez kolejne 4s.
+0C3F6h                                                           ; ==============================================================================
+0C3F6h            CSTS:                 EQU       0FFC3H
+0C3F6h                                            
+0C3F6h                                                           ; Komórki bufora bezpieczeñstwa w RAM
+0C3F6h            KOPIA_LSB:            EQU       0FEB6H
+0C3F6h            KOPIA_MSB:            EQU       0FEB7H
+0C3F6h            KOPIA_NUMERU:         EQU       0FEB8H
+0C3F6h                                            
+0C3F6h            SPRAWDZ_KLAWIATURE:             
+0C3F6h F5                               PUSH      AF
+0C3F7h C5                               PUSH      BC
+0C3F8h D5                               PUSH      DE
+0C3F9h E5                               PUSH      HL
+0C3FAh                                            
+0C3FAh                                                           ; Wywo³anie systemowej procedury skanowania klawiatury CA80
+0C3FAh CDC3FF                           CALL      CSTS           ; Wynik wraca bezpoœrednio w rejestrze A
+0C3FDh                                            
+0C3FDh FE0D                             CP        0DH            ; klawisz " D "
+0C3FFh CA0AC4                           JP        Z,POKAZ_REKORD_MIN
+0C402h                                            
+0C402h FE0F                             CP        0FH            ; klawisz " F "
+0C404h CA40C4                           JP        Z,POKAZ_REKORD_MAX
+0C407h                                            
+0C407h C388C4                           JP        KONIEC_KLAWIATURY
+0C40Ah                                            
+0C40Ah            POKAZ_REKORD_MIN:               
+0C40Ah                                                           ; --- KROK 1: KOPIA BEZPIECZEÑSTWA ---
+0C40Ah 3AB0FE                           LD        A,(LSB_TEMP)
+0C40Dh 32B6FE                           LD        (KOPIA_LSB),A
+0C410h 3AB1FE                           LD        A,(MSB_TEMP)
+0C413h 32B7FE                           LD        (KOPIA_MSB),A
+0C416h 3AB2FE                           LD        A,(NR_CZUJNIKA)
+0C419h 32B8FE                           LD        (KOPIA_NUMERU),A
+0C41Ch                                            
+0C41Ch                                                           ; --- KROK 2: WYŒWIETLENIE SAMEJ TEMPERATURY MIN (Przez 4 sekundy) ---
+0C41Ch 3AF5FE                           LD        A,(REJESTR_MIN_RAM+5); £adujemy LSB temperatury MIN
+0C41Fh 32B0FE                           LD        (LSB_TEMP),A
+0C422h 3AF6FE                           LD        A,(REJESTR_MIN_RAM+6); £adujemy MSB temperatury MIN
+0C425h 32B1FE                           LD        (MSB_TEMP),A
+0C428h 3AF4FE                           LD        A,(REJESTR_MIN_RAM+4); £adujemy numer czujnika MIN
+0C42Bh 32B2FE                           LD        (NR_CZUJNIKA),A
+0C42Eh                                            
+0C42Eh CD79C2                           CALL      KONWERSJA_TEMP ; Wywo³anie Bloku 3 (Ekran poka¿e temperaturê)
+0C431h CDB4C4                           CALL      OPOZN_2_SEK    ; Odczekanie pierwszych 4 sekund
+0C434h                                            
+0C434h                                                           ; --- KROK 3: WYŒWIETLENIE DATY I CZASU MIN (Przez kolejne 4 sekundy) ---
+0C434h 21F0FE                           LD        HL,REJESTR_MIN_RAM;0FEF0H         ; HL wskazuje na pocz¹tek stempla MIN (Dzieñ)
+0C437h CD8DC4                           CALL      PRZYGOTUJ_I_WYSWIETL_DATETIME
+0C43Ah CDB4C4                           CALL      OPOZN_2_SEK    ; Odczekanie kolejnych 4 sekund
+0C43Dh C373C4                           JP        PRZYWROC_STAN_NORMALNY
+0C440h                                            
+0C440h            POKAZ_REKORD_MAX:               
+0C440h                                                           ; --- KROK 1: KOPIA BEZPIECZEÑSTWA ---
+0C440h 3AB0FE                           LD        A,(LSB_TEMP)
+0C443h 32B6FE                           LD        (KOPIA_LSB),A
+0C446h 3AB1FE                           LD        A,(MSB_TEMP)
+0C449h 32B7FE                           LD        (KOPIA_MSB),A
+0C44Ch 3AB2FE                           LD        A,(NR_CZUJNIKA)
+0C44Fh 32B8FE                           LD        (KOPIA_NUMERU),A
+0C452h                                            
+0C452h                                                           ; --- KROK 2: WYŒWIETLENIE SAMEJ TEMPERATURY MAX (Przez 4 sekundy) ---
+0C452h 3AFCFE                           LD        A,(REJESTR_MAX_RAM+5); £adujemy LSB temperatury MAX
+0C455h 32B0FE                           LD        (LSB_TEMP),A
+0C458h 3AFDFE                           LD        A,(REJESTR_MAX_RAM+6); £adujemy MSB temperatury MAX
+0C45Bh 32B1FE                           LD        (MSB_TEMP),A
+0C45Eh 3AFBFE                           LD        A,(REJESTR_MAX_RAM+4); £adujemy numer czujnika MAX
+0C461h 32B2FE                           LD        (NR_CZUJNIKA),A
+0C464h                                            
+0C464h CD79C2                           CALL      KONWERSJA_TEMP ; Wywo³anie Bloku 3 (Ekran poka¿e temperaturê)
+0C467h CDB4C4                           CALL      OPOZN_2_SEK    ; Odczekanie pierwszych 4 sekund
+0C46Ah                                            
+0C46Ah                                                           ; --- KROK 3: WYŒWIETLENIE DATY I CZASU MAX (Przez kolejne 4 sekundy) ---
+0C46Ah 21F7FE                           LD        HL,REJESTR_MAX_RAM;0FEF7H         ; HL wskazuje na pocz¹tek stempla MAX (Dzieñ)
+0C46Dh CD8DC4                           CALL      PRZYGOTUJ_I_WYSWIETL_DATETIME
+0C470h CDB4C4                           CALL      OPOZN_2_SEK    ; Odczekanie kolejnych 4 sekund
+0C473h                                            
+0C473h            PRZYWROC_STAN_NORMALNY:
+0C473h                                            
+0C473h                                                           ; Przywrócenie pierwotnego stanu z kopii bezpieczeñstwa w RAM
+0C473h 3AB6FE                           LD        A,(KOPIA_LSB)
+0C476h 32B0FE                           LD        (LSB_TEMP),A
+0C479h 3AB7FE                           LD        A,(KOPIA_MSB)
+0C47Ch 32B1FE                           LD        (MSB_TEMP),A
+0C47Fh 3AB8FE                           LD        A,(KOPIA_NUMERU)
+0C482h 32B2FE                           LD        (NR_CZUJNIKA),A
+0C485h                                            
+0C485h CD79C2                           CALL      KONWERSJA_TEMP ; Wróæ na ekranie do bie¿¹cej temperatury
+0C488h                                            
+0C488h            KONIEC_KLAWIATURY:              
+0C488h E1                               POP       HL
+0C489h D1                               POP       DE
+0C48Ah C1                               POP       BC
+0C48Bh F1                               POP       AF
+0C48Ch C9                               RET       
+0C48Dh                                            
+0C48Dh                                                           ; ==============================================================================
+0C48Dh                                                           ; PODPROGRAM POMOCNICZY: PRZYGOTUJ_I_WYSWIETL_DATETIME
+0C48Dh                                                           ; Mapuje Datê i Czas w uk³adzie: DDMM GG.M bezpoœrednio do rejestrów LED CA80
+0C48Dh                                                           ; ==============================================================================
+0C48Dh            PRZYGOTUJ_I_WYSWIETL_DATETIME:
+0C48Dh                                            
+0C48Dh E5                               PUSH      HL
+0C48Eh D5                               PUSH      DE
+0C48Fh C5                               PUSH      BC
+0C490h                                            
+0C490h                                                           ; --- 1. DZIEN (Komórka [HL]) -> CYF7 (0xFFFE) i CYF6 (0xFFFD) ---
+0C490h 7E                               LD        A,(HL)         ; Pobierz bajt dnia ze stempla:0xFEF0
+0C491h DF                               RST       18H
+0C492h 26                               DEFB      26H
+0C493h 23                               INC       HL             ; HL wskazuje na Miesi¹c 0xFEF1
+0C494h                                            
+0C494h                                                           ; --- 2. MIESIAC (Komórka [HL]) -> CYF5 (0xFFFC) i CYF4 (0xFFFB) ---
+0C494h 7E                               LD        A,(HL)         ; Pobierz bajt miesi¹ca 
+0C495h DF                               RST       18H
+0C496h 24                               DEFB      24H
+0C497h 23                               INC       HL             ; HL wskazuje na Godzinê 0xFEF2
+0C498h                                            
+0C498h                                                           ; --- 3. CYF3 (0xFFFA) -> WYGASZENIE (Separator wizualny w œrodku ekranu) ---
+0C498h AF                               XOR       A
+0C499h 32FAFF                           LD        (CYF3),A       ; CYF3 = 00h (Pusty, ciemny segment)
+0C49Ch                                            
+0C49Ch                                                           ; --- 4. MINUTA (Komórka [HL]) -> CYF0 (0xFFF7) ---
+0C49Ch 23                               INC       HL             ; 0xFEF3
+0C49Dh 7E                               LD        A,(HL)         ; Pobierz bajt minut
+0C49Eh                                                           ; CALL ROZBIJ_NA_DWIE_CYFRY
+0C49Eh 1F                               RRA       
+0C49Fh 1F                               RRA       
+0C4A0h 1F                               RRA       
+0C4A1h 1F                               RRA       
+0C4A2h DF                               RST       18H            ; WYSW. REJ. A
+0C4A3h 10                               DEFB      10H
+0C4A4h                                            
+0C4A4h                                                           ; --- 5. GODZINA (Komórka [HL]) -> CYF2 (0xFFF9) i CYF1 (0xFFF8) ---
+0C4A4h 2B                               DEC       HL             ; 0xFEF1
+0C4A5h 7E                               LD        A,(HL)         ; Pobierz bajt godziny
+0C4A6h DF                               RST       18H
+0C4A7h 21                               DEFB      21H
+0C4A8h 3AF8FF                           LD        A,(CYF1)
+0C4ABh F680                             OR        80H
+0C4ADh                                                           ; Zapal bit 7 (kropka dziesiêtna) jako separator czasu
+0C4ADh 32F8FF                           LD        (CYF1),A       ; CYF1 = Jednoœci godziny z kropk¹
+0C4B0h                                            
+0C4B0h C1                               POP       BC
+0C4B1h D1                               POP       DE
+0C4B2h E1                               POP       HL
+0C4B3h C9                               RET       
+0C4B4h                                            
+0C4B4h                                                           ; ==============================================================================
+0C4B4h                                                           ; PODPROGRAM POMOCNICZY: OPOZN_4_SEK (Z zachowaniem odœwie¿ania NMI)
+0C4B4h                                                           ; ==============================================================================
+0C4B4h            OPOZN_2_SEK:                    
+0C4B4h F5                               PUSH      AF
+0C4B5h C5                               PUSH      BC
+0C4B6h D5                               PUSH      DE
+0C4B7h 0E02                             LD        C,2            ; 2 * 1 sekunda = 4s
+0C4B9h            PETLA_2S_Z:                     
+0C4B9h 0664                             LD        B,100          ; 100 * 10 ms = 1 sekunda
+0C4BBh            PETLA_2S_INTERN:                
+0C4BBh 113505                           LD        DE,1333
+0C4BEh            PETLA_2S_DELAY:                 
+0C4BEh 1B                               DEC       DE
+0C4BFh 7A                               LD        A,D
+0C4C0h B3                               OR        E
+0C4C1h C2BEC4                           JP        NZ,PETLA_2S_DELAY
+0C4C4h 05                               DEC       B
+0C4C5h C2BBC4                           JP        NZ,PETLA_2S_INTERN
+0C4C8h 0D                               DEC       C
+0C4C9h C2B9C4                           JP        NZ,PETLA_2S_Z
+0C4CCh D1                               POP       DE
+0C4CDh C1                               POP       BC
+0C4CEh F1                               POP       AF
+0C4CFh C9                               RET       
+0C4D0h                                                           ; BEZPOŒREDNIE PODPROGRAMY POMOCNICZE STEMPLOWANIA CZASU DLA ASIDE
+0C4D0h                                                           ; Pewny, bezwzglêdny zapis struktur do pamiêci RAM bez u¿ywania rejestru HL
+0C4D0h                                                           ; ==============================================================================
+0C4D0h                                            
+0C4D0h            ZAPISZ_STEMPEL_MIN_DIRECT:
+0C4D0h                                            
+0C4D0h 3AF1FF                           LD        A,(SYS_DZIEN)
+0C4D3h 32F0FE                           LD        (REJESTR_MIN_RAM),A; 1. Dzieñ
+0C4D6h 3AF2FF                           LD        A,(SYS_MIES)
+0C4D9h 32F1FE                           LD        (REJESTR_MIN_RAM+1),A; 2. Miesi¹c
+0C4DCh 3AEFFF                           LD        A,(SYS_GODZ)
+0C4DFh 32F2FE                           LD        (REJESTR_MIN_RAM+2),A; 3. Godzina
+0C4E2h 3AEEFF                           LD        A,(SYS_MIN)
+0C4E5h 32F3FE                           LD        (REJESTR_MIN_RAM+3),A; 4. Minuta
+0C4E8h 3AB2FE                           LD        A,(NR_CZUJNIKA)
+0C4EBh 32F4FE                           LD        (REJESTR_MIN_RAM+4),A; 5. Numer czujnika MIN
+0C4EEh C9                               RET       
+0C4EFh                                            
+0C4EFh            ZAPISZ_STEMPEL_MAX_DIRECT:
+0C4EFh                                            
+0C4EFh 3AF1FF                           LD        A,(SYS_DZIEN)
+0C4F2h 32F7FE                           LD        (REJESTR_MIN_RAM+7),A; 1. Dzieñ
+0C4F5h 3AF2FF                           LD        A,(SYS_MIES)
+0C4F8h 32F8FE                           LD        (REJESTR_MIN_RAM+8),A; 2. Miesi¹c
+0C4FBh 3AEFFF                           LD        A,(SYS_GODZ)
+0C4FEh 32F9FE                           LD        (REJESTR_MIN_RAM+9),A; 3. Godzina
+0C501h 3AEEFF                           LD        A,(SYS_MIN)
+0C504h 32FAFE                           LD        (REJESTR_MIN_RAM+10),A; 4. Minuta
+0C507h 3AB2FE                           LD        A,(NR_CZUJNIKA)
+0C50Ah 32FBFE                           LD        (REJESTR_MIN_RAM+11),A; 5. Numer czujnika MAX
+0C50Dh C9                               RET       
+0C50Eh                                            
+0C50Eh                                                           ;= = = = = = = = =
+0C50Eh                                                           ; to ponizej to ustawianie 9-bit do 12-bit  rozdzielczosci dla czujnika
+0C50Eh                                                           ; i ustawianie alarmu
+0C50Eh                                            
+0C50Eh                                                           ; ==============================================================================
+0C50Eh                                                           ; --- KROK 1: Zapis konfiguracji do RAM pierwszego czujnika ---
+0C50Eh                                                           ;    CALL NMI_OFF
+0C50Eh                                                           ;    CALL OW_WYBIERZ_SENSOR1 
+0C50Eh                                            
+0C50Eh                                                           ;    LD A, 0x4E          ; Rozkaz: Write Scratchpad
+0C50Eh                                                           ;    CALL OW_ZAPISZ_BAJT
+0C50Eh                                            
+0C50Eh                                                           ;    LD A, 0x4B          ; Bajt 1: TH (75 st. C)
+0C50Eh                                                           ;    CALL OW_ZAPISZ_BAJT
+0C50Eh                                            
+0C50Eh                                                           ;    LD A, 0x46          ; Bajt 2: TL (70 st. C)
+0C50Eh                                                           ;    CALL OW_ZAPISZ_BAJT
+0C50Eh                                            
+0C50Eh                                                           ;    LD A, 0x5F          ; Bajt 3: Config Register = 11 bitów (0.125 st. C)
+0C50Eh                                                           ;    CALL OW_ZAPISZ_BAJT   ; 1F 0,50  3F 0.25   7F 0.125  5F 0.0625
+0C50Eh                                            
+0C50Eh                                                           ; --- KROK 2: Zapis do EEPROM pierwszego czujnika ---
+0C50Eh                                                           ;    CALL OW_WYBIERZ_SENSOR1 
+0C50Eh                                            
+0C50Eh                                                           ;    LD A, 0x48          ; Rozkaz: Copy Scratchpad (zapis do EEPROM)
+0C50Eh                                                           ;    CALL OW_ZAPISZ_BAJT
+0C50Eh                                                           ;    CALL NMI_ON                 ; Przywróæ przerwania
+0C50Eh                                            
+0C50Eh                                                           ;    CALL Delay_10ms     ; Czas trwania zapisu w EEPROM czujnika
+0C50Eh                                            
+0C50Eh                                                           ;    RET  
+0C50Eh                                            
+0C50Eh                                                           ; ------------------------------------------------------------------------------
+0C50Eh                                                           ; ADRESOWANIE KONKRETNEGO CZUJNIKA (Match ROM 0x55)
+0C50Eh                                                           ; ------------------------------------------------------------------------------
+0C50Eh                                                           ;OW_WYBIERZ_SENSOR1:
+0C50Eh                                                           ;    CALL OW_Reset       ; 1. Reset magistrali
+0C50Eh                                            
+0C50Eh                                                           ;    LD A, 0x55          ; 2. Rozkaz Match ROM (wybór konkretnego czujnika)
+0C50Eh                                                           ;    CALL OW_ZAPISZ_BAJT
+0C50Eh                                            
+0C50Eh                                                           ; 3. Wysy³anie 8 bajtów adresu ROM z pamiêci (od 0xFEA0 do 0xFEA7)
+0C50Eh                                                           ;    LD HL, SENSOR1_ROM  ; WskaŸnik HL = 0xFEA0
+0C50Eh                                                           ;    LD B, 8             ; Licznik bajtów
+0C50Eh                                                           ;OW_SendROMLoop:
+0C50Eh                                                           ;    LD A, (HL)          ; Pobierz bajt adresu z pamiêci RAM
+0C50Eh                                                           ;    CALL OW_ZAPISZ_BAJT   ; Wyœlij go po 1-Wire
+0C50Eh                                                           ;    INC HL              ; Nastêpny bajt
+0C50Eh                                                           ;    DJNZ OW_SendROMLoop
+0C50Eh                                                           ;    RET
+0C50Eh                                                           ;          
+0C50Eh                                                           ;Delay_10ms:
+0C50Eh                                                           ;    LD BC, 1538 ; 0602h       ; [10 T] Wartoœæ licznika pêtli
+0C50Eh                                                           ;petla_10ms:
+0C50Eh                                                           ;    DEC BC              ; [6 T]  Zmniejsz BC o 1
+0C50Eh                                                           ;    LD A, B             ; [4 T]  SprawdŸ, czy BC == 0
+0C50Eh                                                           ;    OR C                ; [4 T]
+0C50Eh                                                           ;    JR NZ, petla_10ms       ; [12 T gdy skacze / 7 T przy ostatnim przejœciu] 
+0C50Eh                                                           ;    RET                 ; [10 T] Powrót z procedury
+0C50Eh                                            
